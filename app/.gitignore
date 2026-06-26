@@ -1,0 +1,13 @@
+# go
+cerebro/cerebro
+cerebro/out/
+# rust
+executor/target/
+# node / next
+dashboard/node_modules/
+dashboard/.next/
+dashboard/next-env.d.ts
+# misc
+*.log
+.env
+.DS_Store

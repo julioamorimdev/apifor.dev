@@ -1,0 +1,23 @@
+[package]
+name = "executor"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "executor"
+path = "src/main.rs"
+
+[dependencies]
+tonic = "0.11"
+prost = "0.12"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-stream = "0.1"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tonic-build = "0.11"
+
+[profile.release]
+strip = true

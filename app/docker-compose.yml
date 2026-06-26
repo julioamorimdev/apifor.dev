@@ -1,0 +1,59 @@
+name: apifor
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: pg
+      POSTGRES_DB: apifor
+    ports: ["55432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d apifor"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: postgres:16
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes: ["../contracts/sql:/sql:ro"]
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        DB=postgresql://postgres:pg@postgres/apifor
+        if [ "$$(psql "$$DB" -tAc "select to_regclass('public.plan_catalog')")" = "plan_catalog" ]; then
+          echo "schema já aplicado; pulando"
+          exit 0
+        fi
+        for f in /sql/001_schema.sql /sql/002_rls.sql /sql/003_seeds.sql; do
+          echo "applying $$f"
+          psql "$$DB" -v ON_ERROR_STOP=1 -f "$$f"
+        done
+        echo "migrations done"
+
+  cerebro:
+    build: ./cerebro
+    environment:
+      CEREBRO_ADDR: ":8080"
+      CEREBRO_GRPC: ":9090"
+      DATABASE_URL: "postgres://postgres:pg@postgres/apifor?sslmode=disable"
+      JWT_SECRET: "dev-secret"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports: ["8088:8080", "9090:9090"]
+
+  executor:
+    build: ./executor
+    environment:
+      CEREBRO_HTTP: "http://cerebro:8080"
+      CEREBRO_GRPC: "http://cerebro:9090"
+    depends_on:
+      cerebro: { condition: service_started }
+
+volumes:
+  pgdata:

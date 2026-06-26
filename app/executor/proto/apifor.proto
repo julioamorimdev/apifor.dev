@@ -1,0 +1,192 @@
+syntax = "proto3";
+package apifor.v1;
+
+option go_package = "apifor.dev/cerebro/gen/apiforv1;apiforv1";
+
+// Contrato do canal cérebro ↔ executor.
+// Transporte: gRPC bidi streaming sobre HTTP/2 + mTLS (cert de device).
+// Entrega: at-least-once + idempotency_key + ack. Push pela stream.
+
+// ───────────────────────── Serviço ─────────────────────────
+service Orchestrator {
+  // Enrollment (unário, antes da stream): troca enrollment token + CSR por cert de device.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+
+  // Stream longeva: heartbeat, comandos (push), eventos e acks num único canal.
+  rpc Stream(stream Envelope) returns (stream Envelope);
+}
+
+// ───────────────────────── Envelope ─────────────────────────
+enum MsgType {
+  MSG_UNSPECIFIED          = 0;
+
+  // Commands (cérebro → executor)
+  LEASE_GRANTED            = 10;
+  LEASE_DENIED             = 11;
+  LEASE_REVOKED            = 12;
+  DISPATCH_TASK            = 13;
+  REQUEST_PLAN             = 14;
+  DISPATCH_STEP            = 15;
+  ANSWER_INTERVENTION      = 16;
+  CONFIG_SYNC              = 17;
+  PAUSE_WORKER             = 18;
+  STOP_WORKER              = 19;
+  HEARTBEAT_ACK            = 20;
+  COMMAND_ACK              = 21; // ack genérico do cérebro p/ event
+
+  // Events (executor → cérebro)
+  HEARTBEAT                = 50;
+  LEASE_REQUEST            = 51;
+  WORKER_STARTED           = 52;
+  WORKER_STOPPED           = 53;
+  WORKER_STATUS            = 54;
+  STEP_STARTED             = 55;
+  STEP_PROGRESS            = 56;
+  STEP_COMPLETED           = 57;
+  STEP_FAILED              = 58;
+  PLAN_RESULT              = 59;
+  INTERVENTION_REQUEST     = 60;
+  TASK_STATE_SNAPSHOT      = 61;
+  EVENT_ACK                = 62; // ack do executor p/ command
+  EVENT_NACK               = 63;
+}
+
+message Envelope {
+  string  id              = 1; // msg_… (ULID)
+  string  correlation_id  = 2; // liga resposta ao pedido
+  string  idempotency_key = 3; // dedupe na reentrega
+  MsgType type            = 4;
+  int64   ts              = 5; // epoch ms
+  oneof payload {
+    // commands
+    LeaseGranted        lease_granted        = 10;
+    LeaseDenied         lease_denied         = 11;
+    LeaseRevoked        lease_revoked        = 12;
+    DispatchTask        dispatch_task        = 13;
+    RequestPlan         request_plan         = 14;
+    DispatchStep        dispatch_step        = 15;
+    AnswerIntervention  answer_intervention  = 16;
+    ConfigSync          config_sync          = 17;
+    WorkerControl       worker_control       = 18; // pause/stop
+    // events
+    Heartbeat           heartbeat            = 50;
+    LeaseRequest        lease_request        = 51;
+    WorkerLifecycle     worker_lifecycle     = 52; // started/stopped
+    WorkerStatus        worker_status        = 54;
+    StepEvent           step_event           = 55; // started/progress/completed/failed
+    PlanResult          plan_result          = 59;
+    InterventionRequest intervention_request = 60;
+    TaskStateSnapshot   task_state_snapshot  = 61;
+    Ack                 ack                  = 62; // ack/nack genérico
+  }
+}
+
+// ───────────────────────── Enrollment ─────────────────────────
+message EnrollRequest {
+  string enrollment_token = 1; // emitido pelo backend após login
+  bytes  csr              = 2; // Certificate Signing Request (chave priva fica local)
+  string device_label     = 3;
+}
+message EnrollResponse {
+  string device_id       = 1; // dev_…
+  bytes  certificate     = 2; // cert de device assinado (mTLS)
+  bytes  ca_chain        = 3;
+  int64  expires_at      = 4; // epoch ms
+}
+
+// ───────────────────────── Lease ─────────────────────────
+message LeaseRequest {
+  string workspace_id     = 1;
+  WorkerSource source      = 2;
+  string pinned_worker_id = 3; // se source=PINNED
+}
+enum WorkerSource { SOURCE_UNSPECIFIED = 0; POOL = 1; PINNED = 2; }
+
+message LeaseGranted {
+  string lease_id   = 1;
+  string worker_id  = 2; // wki_…
+  int64  expires_at = 3; // 0 = sem TTL
+  bool   auto_renew = 4;
+}
+message LeaseDenied  { string reason = 1; } // plan_limit | hours_cap | session
+message LeaseRevoked { string lease_id = 1; string reason = 2; }
+
+// ───────────────────────── Tarefa / Step ─────────────────────────
+message DispatchTask {
+  string task_id          = 1;
+  string repo_id          = 2;
+  string agent_profile_id = 3;
+  string worker_id        = 4;
+  map<string,string> params = 5;
+}
+
+message RequestPlan {
+  string task_id         = 1;
+  string prompt_template = 2;  // ESTRUTURA, sem código
+  repeated string context_refs = 3; // referências a resolver LOCAL
+}
+
+message PlanResult {                 // resposta do relay — só plano estruturado
+  string task_id   = 1;
+  repeated PlanStep steps = 2;
+  repeated string target_files = 3;
+  string decision  = 4;
+  int64  tokens_used = 5;
+}
+message PlanStep { int32 idx = 1; StepKind kind = 2; string label = 3; }
+enum StepKind { STEP_UNSPECIFIED = 0; PLAN = 1; EXEC = 2; TEST = 3; REVIEW = 4; MERGE = 5; QUESTION = 6; }
+
+message DispatchStep {
+  string step_id     = 1;
+  string task_id     = 2;
+  StepKind kind      = 3;
+  string instructions = 4;
+}
+message StepEvent {                  // started/progress/completed/failed
+  string step_id  = 1;
+  string task_id  = 2;
+  StepPhase phase = 3;
+  string output   = 4;  // log curto / resultado
+  string error    = 5;  // se failed
+}
+enum StepPhase { PHASE_UNSPECIFIED = 0; STARTED = 1; PROGRESS = 2; COMPLETED = 3; FAILED = 4; }
+
+// ───────────────────────── Worker runtime ─────────────────────────
+message WorkerLifecycle { string worker_id = 1; bool started = 2; int64 at = 3; }
+message WorkerStatus    { string worker_id = 1; string status = 2; string current_step = 3; string task_id = 4; }
+message WorkerControl   { string worker_id = 1; bool stop = 2; string reason = 3; } // stop=false => pause
+
+// ───────────────────────── Heartbeat ─────────────────────────
+message Heartbeat {
+  repeated string active_leases = 1;
+  int64  worker_hours_seconds   = 2; // acumulado no ciclo
+  repeated WorkerStatus workers = 3;
+}
+message HeartbeatAck { } // (vai no Ack genérico)
+
+// ───────────────────────── Intervenção ─────────────────────────
+message InterventionRequest {
+  string task_id  = 1;
+  string question = 2;
+  repeated string options = 3;
+  string context  = 4;
+}
+message AnswerIntervention {
+  string intervention_id = 1;
+  string decision        = 2;
+  bool   save_memory     = 3;
+  string note            = 4;
+}
+
+// ───────────────────────── Reconciliação ─────────────────────────
+message TaskStateSnapshot {
+  string task_id = 1;
+  repeated StepState steps = 2;
+  string current_step_id   = 3;
+  string status            = 4;
+}
+message StepState { string step_id = 1; int32 idx = 2; string status = 3; }
+
+// ───────────────────────── Config & Ack ─────────────────────────
+message ConfigSync { string workspace_id = 1; string config_json = 2; } // parametrização não-secreta
+message Ack { string ref_id = 1; bool ok = 2; string reason = 3; }      // ok=false => nack

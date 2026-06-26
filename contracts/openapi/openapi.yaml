@@ -1,0 +1,315 @@
+openapi: 3.1.0
+info:
+  title: apifor.dev API
+  version: "1.0.0"
+  description: >
+    REST/JSON do dashboard ↔ cérebro. Auth JWT (access curto + refresh rotativo).
+    Leitura ao vivo via SSE (endpoints /stream). Paginação por cursor. Erro envelopado.
+    Ações locais (ligar worker, gravar segredo, importar KB) NÃO ficam aqui — vão por IPC ao daemon.
+servers:
+  - url: https://api.apifor.dev/v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - { name: auth }
+  - { name: org }
+  - { name: billing }
+  - { name: config }
+  - { name: workers }
+  - { name: tasks }
+  - { name: prs }
+  - { name: intervention }
+  - { name: routines }
+  - { name: knowledge }
+  - { name: telemetry }
+  - { name: notifications }
+  - { name: audit }
+  - { name: account }
+  - { name: cloud }
+
+# ─────────────────────────── COMPONENTS ───────────────────────────
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    cursor: { name: cursor, in: query, schema: { type: string } }
+    limit:  { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 200 } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+    Page:
+      type: object
+      properties:
+        data: { type: array, items: {} }
+        next_cursor: { type: [string, "null"] }
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        name: { type: string }
+        status: { type: string, enum: [active, suspended] }
+    Org:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        plan: { type: string, enum: [free, pro, team, enterprise] }
+    Member:
+      type: object
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        permission_tier: { type: string, enum: [owner, admin, member, billing, viewer] }
+        functional_profile_id: { type: [string, "null"] }
+        status: { type: string, enum: [active, invited, removed] }
+    Subscription:
+      type: object
+      properties:
+        id: { type: string }
+        plan: { type: string, enum: [free, pro, team, enterprise] }
+        status: { type: string, enum: [active, past_due, grace, canceled] }
+        seats: { type: integer }
+        current_period_end: { type: [string, "null"], format: date-time }
+        grace_until: { type: [string, "null"], format: date-time }
+    Usage:
+      type: object
+      properties:
+        week_worker_hours_seconds: { type: integer }
+        weekly_cap_hours: { type: [integer, "null"] }
+        percent_used: { type: [number, "null"] }
+        spend_cents: { type: integer }
+    PoolConfig:
+      type: object
+      properties:
+        parallel_workers: { type: integer }
+        timeout_min: { type: [integer, "null"] }
+        retries: { type: integer }
+        agent_profiles: { type: array, items: { type: string } }
+        behavior: { type: object, additionalProperties: true }
+        merge_rules: { type: object, additionalProperties: true }
+        limits: { type: object, additionalProperties: true }
+    WorkerInstance:
+      type: object
+      properties:
+        id: { type: string }
+        source: { type: string, enum: [pool, pinned] }
+        host: { type: string, enum: [local, cloud] }
+        status: { type: string, enum: [idle, running, paused, stopped] }
+        current_task_id: { type: [string, "null"] }
+        current_step: { type: [string, "null"] }
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        repo_id: { type: [string, "null"] }
+        status: { type: string, enum: [queued, assigned, planning, running, blocked, in_review, merged, failed, canceled] }
+        priority: { type: integer }
+        source: { type: string, enum: [manual, routine, intervention] }
+    Step:
+      type: object
+      properties:
+        id: { type: string }
+        idx: { type: integer }
+        type: { type: string, enum: [plan, exec, test, review, merge, question] }
+        status: { type: string, enum: [pending, running, done, failed] }
+        label: { type: string }
+    PullRequest:
+      type: object
+      properties:
+        id: { type: string }
+        number: { type: integer }
+        url: { type: string }
+        status: { type: string, enum: [open, ci_running, approved, changes_requested, merged, closed] }
+        ci_status: { type: string, enum: [none, running, passed, failed] }
+        ai_review_status: { type: string, enum: [none, approved, changes] }
+        human_review_status: { type: string, enum: [none, approved, changes] }
+    Routine:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        trigger_type: { type: string, enum: [schedule, event, manual] }
+        trigger_config: { type: object, additionalProperties: true }
+        action: { type: object, additionalProperties: true }
+        enabled: { type: boolean }
+    Connection:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [code, ci, observability, ai_engine] }
+        provider: { type: string }
+        status: { type: string, enum: [ok, needs_setup, error] }
+        secret_ref_id: { type: [string, "null"] }
+    SecretRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        fingerprint: { type: [string, "null"] }
+        location: { type: string, enum: [local, managed_vault] }
+    Device:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        cert_expires_at: { type: [string, "null"], format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        last_seen_at: { type: [string, "null"], format: date-time }
+  responses:
+    BadRequest: { description: erro, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Page:       { description: lista paginada, content: { application/json: { schema: { $ref: '#/components/schemas/Page' } } } }
+
+# ─────────────────────────── PATHS ───────────────────────────
+paths:
+  # auth
+  /auth/login:        { post: { tags: [auth], summary: e-mail/senha, security: [], responses: { '200': { description: ok } } } }
+  /auth/oauth/github: { post: { tags: [auth], summary: OAuth GitHub, security: [], responses: { '200': { description: ok } } } }
+  /auth/refresh:      { post: { tags: [auth], summary: rotaciona refresh, security: [], responses: { '200': { description: ok } } } }
+  /auth/logout:       { post: { tags: [auth], summary: revoga sessão, responses: { '204': { description: ok } } } }
+  /auth/me:           { get:  { tags: [auth], summary: usuário+orgs+plano, responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } } } } }
+  /auth/enroll:       { post: { tags: [auth], summary: emite enrollment token p/ daemon, responses: { '200': { description: ok } } } }
+
+  # org / workspace / members / profiles
+  /orgs/{id}:
+    get:   { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Org' } } } } } }
+    patch: { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+  /orgs/{id}/members:
+    get:  { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [org], summary: convidar membro, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '201': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } } } }
+  /orgs/{id}/members/{mid}:
+    patch:  { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: mid, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+    delete: { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { name: mid, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } }
+  /workspaces:
+    get:  { tags: [org], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [org], summary: novo workspace, responses: { '201': { description: ok } } }
+  /workspaces/{id}:
+    get:    { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+    patch:  { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+    delete: { tags: [org], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } }
+  /profiles:
+    get:  { tags: [org], summary: functional_profile, responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [org], responses: { '201': { description: ok } } }
+
+  # billing
+  /billing/subscription: { get: { tags: [billing], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Subscription' } } } } } } }
+  /billing/checkout:     { post: { tags: [billing], summary: cria Stripe Checkout, responses: { '200': { description: url } } } }
+  /billing/portal:       { post: { tags: [billing], summary: Customer Portal, responses: { '200': { description: url } } } }
+  /billing/usage:        { get: { tags: [billing], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Usage' } } } } } } }
+  /billing/invoices:     { get: { tags: [billing], parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /billing/invoices/{id}: { get: { tags: [billing], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /webhooks/stripe:      { post: { tags: [billing], summary: webhook server-to-server, security: [], responses: { '200': { description: ok } } } }
+
+  # config
+  /workspaces/{id}/pool-config:
+    get:   { tags: [config], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PoolConfig' } } } } } }
+    patch: { tags: [config], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+  /workspaces/{id}/pinned-workers:
+    get:  { tags: [config], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [config], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '201': { description: ok } } }
+  /repositories:
+    get:  { tags: [config], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [config], responses: { '201': { description: ok } } }
+  /agent-profiles:
+    get:  { tags: [config], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [config], responses: { '201': { description: ok } } }
+  /connections:
+    get:  { tags: [config], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [config], summary: registra metadado (sem valor), responses: { '201': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Connection' } } } } } }
+  /secrets:
+    get:  { tags: [config], summary: secret_ref (sem valor), responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [config], summary: registra ref; valor vai por IPC ao daemon, responses: { '201': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/SecretRef' } } } } } }
+
+  # workers (runtime — start/stop é IPC, não aqui)
+  /workers:        { get: { tags: [workers], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /workers/{id}:   { get: { tags: [workers], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/WorkerInstance' } } } } } } }
+  /workers/stream: { get: { tags: [workers], summary: SSE progresso ao vivo, responses: { '200': { description: text/event-stream } } } }
+
+  # tasks
+  /tasks:
+    get:  { tags: [tasks], parameters: [{ name: status, in: query, schema: { type: string } }, { $ref: '#/components/parameters/cursor' }], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [tasks], responses: { '201': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } } } }
+  /tasks/{id}:
+    get:   { tags: [tasks], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+    patch: { tags: [tasks], summary: prioridade/cancelar, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+  /tasks/{id}/steps: { get: { tags: [tasks], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /tasks/stream:     { get: { tags: [tasks], summary: SSE fila, responses: { '200': { description: text/event-stream } } } }
+
+  # prs / ci / qa
+  /pull-requests:                       { get: { tags: [prs], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /pull-requests/{id}:                  { get: { tags: [prs], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/PullRequest' } } } } } } }
+  /pull-requests/{id}/approve:          { post: { tags: [prs], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /pull-requests/{id}/request-changes:  { post: { tags: [prs], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /pull-requests/{id}/merge:            { post: { tags: [prs], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /ci-runs:        { get: { tags: [prs], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /ci-runs/{id}:   { get: { tags: [prs], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /qa-reports:     { get: { tags: [prs], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /qa-reports/{id}: { get: { tags: [prs], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+
+  # intervention
+  /interventions:               { get: { tags: [intervention], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /interventions/{id}/answer:   { post: { tags: [intervention], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /interventions/{id}/fix-agent: { post: { tags: [intervention], summary: reabre com instruções, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } } }
+  /interventions/stream:        { get: { tags: [intervention], summary: SSE, responses: { '200': { description: text/event-stream } } } }
+
+  # routines
+  /routines:
+    get:  { tags: [routines], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [routines], responses: { '201': { description: ok } } }
+  /routines/{id}:
+    patch:  { tags: [routines], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+    delete: { tags: [routines], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } }
+  /routines/{id}/run: { post: { tags: [routines], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '202': { description: disparada } } } }
+
+  # knowledge
+  /memories:
+    get:  { tags: [knowledge], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post: { tags: [knowledge], responses: { '201': { description: ok } } }
+  /memories/{id}:
+    patch:  { tags: [knowledge], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '200': { description: ok } } }
+    delete: { tags: [knowledge], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } }
+  /kb-documents:    { get: { tags: [knowledge], summary: 'metadado; arquivo via IPC', responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /kb-documents/{id}: { delete: { tags: [knowledge], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } } }
+
+  # telemetry / logs
+  /telemetry:        { get: { tags: [telemetry], responses: { '200': { description: ok } } } }
+  /telemetry/stream: { get: { tags: [telemetry], summary: SSE, responses: { '200': { description: text/event-stream } } } }
+  /logs:             { get: { tags: [telemetry], parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /logs/stream:      { get: { tags: [telemetry], summary: SSE tail, responses: { '200': { description: text/event-stream } } } }
+
+  # notifications
+  /notifications:           { get: { tags: [notifications], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /notifications/{id}/read: { post: { tags: [notifications], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } } }
+  /notifications/read-all:  { post: { tags: [notifications], responses: { '204': { description: ok } } } }
+  /notifications/stream:    { get: { tags: [notifications], summary: SSE, responses: { '200': { description: text/event-stream } } } }
+
+  # audit
+  /audit:        { get: { tags: [audit], parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { '200': { $ref: '#/components/responses/Page' } } } }
+  /audit/export: { post: { tags: [audit], summary: Enterprise — export, responses: { '202': { description: gerando } } } }
+
+  # account / devices / support
+  /account:
+    get:   { tags: [account], responses: { '200': { description: ok } } }
+    patch: { tags: [account], responses: { '200': { description: ok } } }
+  /account/devices:       { get: { tags: [account], responses: { '200': { description: ok, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Device' } } } } } } } }
+  /account/devices/{id}:  { delete: { tags: [account], summary: revoga cert = kill-switch, parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } } }
+  /support/tickets:       { post: { tags: [account], summary: abrir chamado, responses: { '201': { description: ok } } } }
+
+  # cloud (add-on)
+  /cloud/instances:
+    get:    { tags: [cloud], responses: { '200': { $ref: '#/components/responses/Page' } } }
+    post:   { tags: [cloud], summary: provisiona managed worker, responses: { '201': { description: ok } } }
+  /cloud/instances/{id}:  { delete: { tags: [cloud], parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { '204': { description: ok } } } }
+  /cloud/usage:           { get: { tags: [cloud], summary: vCPU/metered, responses: { '200': { description: ok } } } }

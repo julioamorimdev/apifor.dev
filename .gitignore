@@ -1,0 +1,16 @@
+# build artifacts
+app/cerebro/cerebro
+app/executor/target/
+app/dashboard/node_modules/
+app/dashboard/.next/
+app/dashboard/next-env.d.ts
+
+# env / secrets (NUNCA commitar — credenciais são locais)
+.env
+*.local
+app/**/.env
+
+# misc
+*.log
+.DS_Store
+scratchpad/
