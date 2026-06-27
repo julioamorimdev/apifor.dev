@@ -35,6 +35,7 @@ func main() {
 	log.Printf("db conectado + seed demo (login: %s / %s)", db.DemoEmail, db.DemoPass)
 
 	a := auth.New(secret)
+	hub := grpcsrv.NewHub() // ponte REST -> stream do executor (relay)
 
 	// gRPC
 	go func() {
@@ -43,7 +44,7 @@ func main() {
 			log.Fatalf("grpc listen: %v", err)
 		}
 		gs := grpc.NewServer()
-		apiforv1.RegisterOrchestratorServer(gs, &grpcsrv.Server{DB: database, Auth: a})
+		apiforv1.RegisterOrchestratorServer(gs, &grpcsrv.Server{DB: database, Auth: a, Hub: hub})
 		log.Printf("gRPC ouvindo em %s", grpcAddr)
 		if err := gs.Serve(lis); err != nil {
 			log.Fatalf("grpc serve: %v", err)
@@ -51,7 +52,7 @@ func main() {
 	}()
 
 	// HTTP
-	api := &httpapi.API{DB: database, Auth: a}
+	api := &httpapi.API{DB: database, Auth: a, Hub: hub}
 	log.Printf("HTTP ouvindo em %s", httpAddr)
 	if err := http.ListenAndServe(httpAddr, api.Routes()); err != nil {
 		log.Fatal(err)

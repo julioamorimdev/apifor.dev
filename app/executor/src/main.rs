@@ -1,13 +1,27 @@
-// executor — data plane do apifor.dev (M1: espinha e2e real).
-// Fluxo: login HTTP -> Enroll gRPC -> Stream -> LeaseRequest -> recebe DispatchTask -> StepCompleted.
+// executor — data plane do apifor.dev.
+// M1: login -> Enroll -> Stream -> Lease -> DispatchTask(fake) -> StepCompleted.
+// M2.1: vault local cifrado + IPC (secret.put) + relay de planejamento
+//       (RequestPlan -> lê refs locais -> chama Anthropic com a chave do user -> PlanResult).
+//
+// Subcomandos (cliente IPC):
+//   executor secret-put <name> [kind]   (valor em $VALUE ou stdin)
+//   executor secret-del <name>
+//   executor status
 pub mod pb {
     tonic::include_proto!("apifor.v1");
 }
+mod ipc;
+mod relay;
+mod vault;
 
 use pb::envelope::Payload;
 use pb::orchestrator_client::OrchestratorClient;
-use pb::{Envelope, EnrollRequest, Heartbeat, LeaseRequest, MsgType, StepEvent, StepPhase, WorkerSource};
+use pb::{
+    Envelope, EnrollRequest, Heartbeat, LeaseRequest, MsgType, PlanResult, PlanStep, StepEvent,
+    StepPhase, WorkerSource,
+};
 use std::env;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
@@ -37,9 +51,70 @@ fn env_msg(t: MsgType, p: Payload) -> Envelope {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    match args.get(1).map(|s| s.as_str()) {
+        Some("secret-put") => return cli_secret_put(&args).await,
+        Some("secret-del") => return cli_secret_del(&args).await,
+        Some("status") => return cli_status().await,
+        _ => {}
+    }
+    run_daemon().await
+}
+
+// ───────────────────────── cliente IPC ─────────────────────────
+
+async fn cli_secret_put(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let name = args.get(2).cloned().unwrap_or_else(|| "anthropic".into());
+    let kind = args.get(3).cloned().unwrap_or_else(|| "anthropic_api_key".into());
+    let value = match env::var("VALUE") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            use std::io::Read;
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            s.trim().to_string()
+        }
+    };
+    let resp = ipc::call(serde_json::json!({
+        "cmd": "secret.put", "name": name, "value": value, "kind": kind
+    }))
+    .await?;
+    println!("{resp}");
+    Ok(())
+}
+
+async fn cli_secret_del(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let name = args.get(2).cloned().unwrap_or_default();
+    let resp = ipc::call(serde_json::json!({"cmd": "secret.delete", "name": name})).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+async fn cli_status() -> Result<(), Box<dyn std::error::Error>> {
+    let resp = ipc::call(serde_json::json!({"cmd": "status"})).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+// ───────────────────────── daemon ─────────────────────────
+
+async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let http = env::var("CEREBRO_HTTP").unwrap_or_else(|_| "http://cerebro:8080".into());
     let grpc = env::var("CEREBRO_GRPC").unwrap_or_else(|_| "http://cerebro:9090".into());
-    println!("executor M1: http={http} grpc={grpc}");
+    let workdir = env::var("APIFOR_WORKDIR").unwrap_or_else(|_| "/workspace".into());
+    println!("executor M2.1: http={http} grpc={grpc} workdir={workdir}");
+
+    // vault local + servidor IPC (canal por onde a chave do user entra)
+    let vault = Arc::new(vault::Vault::open()?);
+    {
+        let v = vault.clone();
+        let h = http.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ipc::serve(v, h).await {
+                eprintln!("ipc serve: {e}");
+            }
+        });
+    }
 
     // 1. login -> JWT (com retry: cérebro pode ainda estar subindo)
     let client_http = reqwest::Client::new();
@@ -74,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enroll(EnrollRequest {
             enrollment_token: lr.access_token,
             csr: vec![],
-            device_label: "executor-m1".into(),
+            device_label: "executor-m2".into(),
         })
         .await?
         .into_inner();
@@ -82,7 +157,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("enroll ok: device={}", enr.device_id);
 
     // 3. pré-enfileira heartbeat + lease, DEPOIS abre a stream
-    // (evita deadlock bidi: servidor espera 1ª msg p/ enviar headers de resposta)
     let (tx, rx) = mpsc::channel::<Envelope>(16);
     tx.send(env_msg(
         MsgType::Heartbeat,
@@ -105,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut inbound = client.stream(req).await?.into_inner();
     println!("stream aberto, lease solicitado");
 
-    // 5. loop de entrada
+    // 4. loop de entrada
     while let Some(env) = inbound.message().await? {
         match MsgType::try_from(env.r#type).unwrap_or(MsgType::MsgUnspecified) {
             MsgType::LeaseGranted => {
@@ -128,6 +202,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                     .await?;
                     println!("step completed enviado");
+                }
+            }
+            MsgType::RequestPlan => {
+                if let Some(Payload::RequestPlan(rp)) = &env.payload {
+                    println!(
+                        "RequestPlan: task={} refs={:?} — planejando LOCAL",
+                        rp.task_id, rp.context_refs
+                    );
+                    let out = relay::plan(&workdir, &rp.prompt_template, &rp.context_refs, &vault).await;
+                    println!(
+                        "plano pronto: {} passos, {} tokens, decisão={:?}",
+                        out.steps.len(),
+                        out.tokens,
+                        out.decision
+                    );
+                    let steps = out
+                        .steps
+                        .iter()
+                        .map(|s| PlanStep { idx: s.idx, kind: s.kind, label: s.label.clone() })
+                        .collect();
+                    tx.send(env_msg(
+                        MsgType::PlanResult,
+                        Payload::PlanResult(PlanResult {
+                            task_id: rp.task_id.clone(),
+                            steps,
+                            target_files: out.target_files,
+                            decision: out.decision,
+                            tokens_used: out.tokens,
+                        }),
+                    ))
+                    .await?;
+                    println!("PlanResult enviado (só plano estruturado)");
                 }
             }
             _ => {}

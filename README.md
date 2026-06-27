@@ -66,6 +66,7 @@ Login demo: `demo@apifor.dev` / `demo`.
 
 - ✅ **M0** — fundação: monorepo, docker-compose, migrations, serviços sobem.
 - ✅ **M1** — espinha e2e (token-first): login JWT → Enroll → stream gRPC (Go↔Rust) → lease → dispatch → step → task `merged` no Postgres. REST + SSE. Tela Live na GUI (código).
+- 🚧 **M2.1** — relay de planejamento (fronteira de privacidade): **vault local cifrado** (XChaCha20-Poly1305) + canal **IPC** (`secret.put`/`status`) + `RequestPlan` → executor lê refs locais → chama **Anthropic com a chave do user** → `PlanResult` (só plano estruturado) → cérebro grava `step`s e move a task p/ `in_review`. Validado e2e (caminho real bate na Anthropic; sem chave usa stub determinístico).
 
 ## Próximos passos
 

@@ -52,8 +52,16 @@ services:
     environment:
       CEREBRO_HTTP: "http://cerebro:8080"
       CEREBRO_GRPC: "http://cerebro:9090"
+      APIFOR_HOME: "/var/lib/apifor"
+      APIFOR_WORKDIR: "/workspace"
+      # chave Anthropic opcional: se ausente, o relay usa o stub determinístico.
+      # injete a real via IPC (make secret KEY=sk-...), nunca via env do cérebro.
+    volumes:
+      - vaultdata:/var/lib/apifor        # cofre local persistente
+      - ./sample:/workspace:ro           # refs de contexto (lidas LOCALMENTE)
     depends_on:
       cerebro: { condition: service_started }
 
 volumes:
   pgdata:
+  vaultdata:

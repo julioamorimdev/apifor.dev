@@ -1,5 +1,7 @@
-// Package grpcsrv — implementa o serviço Orchestrator (M1 walking skeleton).
-// Fluxo provado: Enroll(token) -> Stream -> LeaseRequest -> LeaseGranted -> DispatchTask(fake) -> StepEvent(completed) -> task merged.
+// Package grpcsrv — implementa o serviço Orchestrator.
+// M1: Enroll(token) -> Stream -> Lease -> DispatchTask(fake) -> StepCompleted.
+// M2.1: relay de planejamento — REST cria tarefa -> Hub empurra RequestPlan ->
+//       executor planeja LOCAL (chave do user) -> PlanResult -> grava steps.
 package grpcsrv
 
 import (
@@ -18,6 +20,7 @@ type Server struct {
 	apiforv1.UnimplementedOrchestratorServer
 	DB   *db.DB
 	Auth *auth.Auth
+	Hub  *Hub
 }
 
 // Enroll: troca o enrollment token (JWT de login) por um device token (M1; mTLS depois).
@@ -50,6 +53,20 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 	}
 	log.Printf("stream aberto: device=%s org=%s", dev.ID, dev.OrgID)
 
+	// Canal de saída (push): tudo que o cérebro envia passa por aqui — uma única
+	// goroutine faz Send, o loop principal faz Recv (regra do gRPC streaming).
+	out := s.Hub.register(dev.OrgID)
+	defer s.Hub.unregister(dev.OrgID, out)
+	go func() {
+		for env := range out {
+			env.Id = db.NewID("msg")
+			env.Ts = time.Now().UnixMilli()
+			if err := stream.Send(env); err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
 		env, err := stream.Recv()
 		if err != nil {
@@ -73,22 +90,10 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 				continue
 			}
 			log.Printf("lease concedido: worker=%s lease=%s", workerID, leaseID)
-			send(stream, &apiforv1.Envelope{
+			out <- &apiforv1.Envelope{
 				Type:    apiforv1.MsgType_LEASE_GRANTED,
 				Payload: &apiforv1.Envelope_LeaseGranted{LeaseGranted: &apiforv1.LeaseGranted{LeaseId: leaseID, WorkerId: workerID, AutoRenew: false}},
-			})
-
-			// M1: despacha uma tarefa fake imediatamente.
-			taskID, err := s.DB.CreateTask(ctx, dev.OrgID, db.DemoWspID, workerID, "Tarefa fake M1")
-			if err != nil {
-				log.Printf("task err: %v", err)
-				continue
 			}
-			log.Printf("dispatch task=%s -> worker=%s", taskID, workerID)
-			send(stream, &apiforv1.Envelope{
-				Type:    apiforv1.MsgType_DISPATCH_TASK,
-				Payload: &apiforv1.Envelope_DispatchTask{DispatchTask: &apiforv1.DispatchTask{TaskId: taskID, WorkerId: workerID}},
-			})
 
 		case apiforv1.MsgType_STEP_COMPLETED:
 			ev := env.GetStepEvent()
@@ -99,7 +104,47 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 					log.Printf("task %s concluída", ev.GetTaskId())
 				}
 			}
+
+		case apiforv1.MsgType_PLAN_RESULT:
+			pr := env.GetPlanResult()
+			if pr == nil {
+				continue
+			}
+			steps := make([]db.PlanStepIn, 0, len(pr.GetSteps()))
+			for _, st := range pr.GetSteps() {
+				steps = append(steps, db.PlanStepIn{
+					Idx:   int(st.GetIdx()),
+					Type:  stepKindToType(st.GetKind()),
+					Label: st.GetLabel(),
+				})
+			}
+			if err := s.DB.SavePlan(ctx, pr.GetTaskId(), steps, pr.GetTokensUsed()); err != nil {
+				log.Printf("save plan err: %v", err)
+				continue
+			}
+			log.Printf("plano recebido: task=%s steps=%d tokens=%d decisão=%q",
+				pr.GetTaskId(), len(steps), pr.GetTokensUsed(), pr.GetDecision())
 		}
+	}
+}
+
+// stepKindToType mapeia o enum do proto p/ o enum step_type do schema.
+func stepKindToType(k apiforv1.StepKind) string {
+	switch k {
+	case apiforv1.StepKind_PLAN:
+		return "plan"
+	case apiforv1.StepKind_EXEC:
+		return "exec"
+	case apiforv1.StepKind_TEST:
+		return "test"
+	case apiforv1.StepKind_REVIEW:
+		return "review"
+	case apiforv1.StepKind_MERGE:
+		return "merge"
+	case apiforv1.StepKind_QUESTION:
+		return "question"
+	default:
+		return "plan"
 	}
 }
 
@@ -117,10 +162,4 @@ func bearer(ctx context.Context) string {
 		return t[7:]
 	}
 	return t
-}
-
-func send(stream apiforv1.Orchestrator_StreamServer, env *apiforv1.Envelope) {
-	env.Id = db.NewID("msg")
-	env.Ts = time.Now().UnixMilli()
-	_ = stream.Send(env)
 }

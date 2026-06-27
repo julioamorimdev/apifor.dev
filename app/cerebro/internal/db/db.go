@@ -144,6 +144,89 @@ func (d *DB) CompleteTask(ctx context.Context, taskID string) error {
 	return err
 }
 
+// ── M2.1: tarefa real + relay de planejamento ──
+
+// CreateRealTask cria uma tarefa em 'queued' (sem worker ainda; o relay planeja antes).
+func (d *DB) CreateRealTask(ctx context.Context, orgID, wspID, title, desc string) (string, error) {
+	id := NewID("tsk")
+	_, err := d.Pool.Exec(ctx, `INSERT INTO task(id,org_id,workspace_id,title,description,status)
+		VALUES($1,$2,$3,$4,$5,'queued')`, id, orgID, wspID, title, desc)
+	return id, err
+}
+
+func (d *DB) SetTaskStatus(ctx context.Context, taskID, status string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE task SET status=$2,updated_at=now() WHERE id=$1`, status, taskID)
+	return err
+}
+
+// PlanStepIn é um passo estruturado devolvido pelo relay (sem código bruto).
+type PlanStepIn struct {
+	Idx   int
+	Type  string // step_type: plan|exec|test|review|merge|question
+	Label string
+}
+
+// SavePlan grava os steps do plano e move a tarefa p/ 'in_review' (plano pronto p/ revisão).
+func (d *DB) SavePlan(ctx context.Context, taskID string, steps []PlanStepIn, tokens int64) error {
+	for _, st := range steps {
+		_, err := d.Pool.Exec(ctx, `INSERT INTO step(id,task_id,idx,type,label,status)
+			VALUES($1,$2,$3,$4,$5,'pending')
+			ON CONFLICT (task_id,idx) DO UPDATE SET type=EXCLUDED.type,label=EXCLUDED.label`,
+			NewID("stp"), taskID, st.Idx, st.Type, st.Label)
+		if err != nil {
+			return err
+		}
+	}
+	_, err := d.Pool.Exec(ctx, `UPDATE task SET status='in_review',tokens_used=$2,updated_at=now() WHERE id=$1`,
+		taskID, tokens)
+	return err
+}
+
+func (d *DB) ListSteps(ctx context.Context, taskID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT idx,type,COALESCE(label,''),status
+		FROM step WHERE task_id=$1 ORDER BY idx`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var idx int
+		var typ, label, st string
+		if err := rows.Scan(&idx, &typ, &label, &st); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"idx": idx, "type": typ, "label": label, "status": st})
+	}
+	return out, rows.Err()
+}
+
+// CreateSecretRef registra só o metadado do segredo (valor fica no vault local).
+func (d *DB) CreateSecretRef(ctx context.Context, orgID, name, typ, fingerprint string) (string, error) {
+	id := NewID("sec")
+	_, err := d.Pool.Exec(ctx, `INSERT INTO secret_ref(id,org_id,name,type,fingerprint,location,exists)
+		VALUES($1,$2,$3,$4,$5,'local',true)`, id, orgID, name, typ, fingerprint)
+	return id, err
+}
+
+func (d *DB) ListSecrets(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,name,COALESCE(type,''),COALESCE(fingerprint,''),location
+		FROM secret_ref WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, name, typ, fp, loc string
+		if err := rows.Scan(&id, &name, &typ, &fp, &loc); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "name": name, "type": typ, "fingerprint": fp, "location": loc})
+	}
+	return out, rows.Err()
+}
+
 // Leitura p/ a UI.
 type Row = map[string]any
 
