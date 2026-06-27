@@ -3,6 +3,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -147,11 +148,119 @@ func (d *DB) CompleteTask(ctx context.Context, taskID string) error {
 // ── M2.1: tarefa real + relay de planejamento ──
 
 // CreateRealTask cria uma tarefa em 'queued' (sem worker ainda; o relay planeja antes).
-func (d *DB) CreateRealTask(ctx context.Context, orgID, wspID, title, desc string) (string, error) {
+// repoID vazio = tarefa sem repositório (só planeja).
+func (d *DB) CreateRealTask(ctx context.Context, orgID, wspID, title, desc, repoID string) (string, error) {
 	id := NewID("tsk")
-	_, err := d.Pool.Exec(ctx, `INSERT INTO task(id,org_id,workspace_id,title,description,status)
-		VALUES($1,$2,$3,$4,$5,'queued')`, id, orgID, wspID, title, desc)
+	var rid *string
+	if repoID != "" {
+		rid = &repoID
+	}
+	_, err := d.Pool.Exec(ctx, `INSERT INTO task(id,org_id,workspace_id,repo_id,title,description,status)
+		VALUES($1,$2,$3,$4,$5,$6,'queued')`, id, orgID, wspID, rid, title, desc)
 	return id, err
+}
+
+// ── M2.2: repositório/conexão + execução real (clone -> coda -> PR) ──
+
+// CreateRepo registra uma conexão de código + um repositório (clone_url em settings).
+func (d *DB) CreateRepo(ctx context.Context, orgID, wspID, name, cloneURL, defaultBranch string) (string, error) {
+	conID := NewID("con")
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO connection(id,org_id,workspace_id,type,provider,label,status)
+		VALUES($1,$2,$3,'code','github',$4,'ok')`, conID, orgID, wspID, name); err != nil {
+		return "", err
+	}
+	repoID := NewID("repo")
+	settings := `{"clone_url":` + jsonStr(cloneURL) + `}`
+	_, err := d.Pool.Exec(ctx, `INSERT INTO repository(id,org_id,workspace_id,name,provider,default_branch,connection_id,settings)
+		VALUES($1,$2,$3,$4,'github',$5,$6,$7::jsonb)`, repoID, orgID, wspID, name, defaultBranch, conID, settings)
+	return repoID, err
+}
+
+func (d *DB) ListRepos(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,name,default_branch,COALESCE(settings->>'clone_url','')
+		FROM repository WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, name, branch, url string
+		if err := rows.Scan(&id, &name, &branch, &url); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "name": name, "default_branch": branch, "clone_url": url})
+	}
+	return out, rows.Err()
+}
+
+// TaskRepo é o repo associado a uma tarefa (vazio se não houver).
+type TaskRepo struct {
+	CloneURL      string
+	DefaultBranch string
+	Prompt        string
+	OrgID         string
+}
+
+func (d *DB) GetTaskRepo(ctx context.Context, taskID string) (*TaskRepo, error) {
+	var tr TaskRepo
+	err := d.Pool.QueryRow(ctx, `SELECT COALESCE(r.settings->>'clone_url',''),COALESCE(r.default_branch,'main'),
+		COALESCE(t.description,''),t.org_id
+		FROM task t LEFT JOIN repository r ON r.id=t.repo_id WHERE t.id=$1`, taskID).
+		Scan(&tr.CloneURL, &tr.DefaultBranch, &tr.Prompt, &tr.OrgID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &tr, err
+}
+
+// SaveExecResult grava o PR aberto e move a tarefa p/ 'in_review' (PR pronto p/ revisão).
+func (d *DB) SaveExecResult(ctx context.Context, taskID, branch, url string) error {
+	var orgID, repoID string
+	err := d.Pool.QueryRow(ctx, `SELECT org_id,COALESCE(repo_id,'') FROM task WHERE id=$1`, taskID).
+		Scan(&orgID, &repoID)
+	if err != nil {
+		return err
+	}
+	var rid *string
+	if repoID != "" {
+		rid = &repoID
+	}
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO pull_request(id,org_id,task_id,repo_id,url,branch,status)
+		VALUES($1,$2,$3,$4,$5,$6,'open')`, NewID("pr"), orgID, taskID, rid, url, branch); err != nil {
+		return err
+	}
+	_, err = d.Pool.Exec(ctx, `UPDATE task SET status='in_review',updated_at=now() WHERE id=$1`, taskID)
+	return err
+}
+
+func (d *DB) FailTask(ctx context.Context, taskID, reason string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE task SET status='failed',blocked_reason=$2,updated_at=now() WHERE id=$1`,
+		taskID, reason)
+	return err
+}
+
+func (d *DB) ListPRs(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(task_id,''),COALESCE(branch,''),COALESCE(url,''),status
+		FROM pull_request WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, task, branch, url, st string
+		if err := rows.Scan(&id, &task, &branch, &url, &st); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "task_id": task, "branch": branch, "url": url, "status": st})
+	}
+	return out, rows.Err()
+}
+
+func jsonStr(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func (d *DB) SetTaskStatus(ctx context.Context, taskID, status string) error {

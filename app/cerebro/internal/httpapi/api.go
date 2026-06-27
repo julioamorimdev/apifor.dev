@@ -30,9 +30,11 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/healthz", a.health)
 	mux.HandleFunc("/v1/auth/login", a.login)
 	mux.HandleFunc("/v1/workers", a.workers)
-	mux.HandleFunc("/v1/tasks", a.tasks)          // GET lista, POST cria (dispara relay)
-	mux.HandleFunc("/v1/tasks/", a.taskSteps)     // GET /v1/tasks/{id}/steps
-	mux.HandleFunc("/v1/secrets", a.secrets)      // GET lista, POST registra metadado
+	mux.HandleFunc("/v1/tasks", a.tasks)           // GET lista, POST cria (dispara relay)
+	mux.HandleFunc("/v1/tasks/", a.taskSteps)      // GET /v1/tasks/{id}/steps
+	mux.HandleFunc("/v1/secrets", a.secrets)       // GET lista, POST registra metadado
+	mux.HandleFunc("/v1/repos", a.repos)           // GET lista, POST registra repositório
+	mux.HandleFunc("/v1/prs", a.prs)               // GET lista pull requests
 	mux.HandleFunc("/v1/workers/stream", a.stream) // SSE
 	return cors(mux)
 }
@@ -96,13 +98,14 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		Title  string   `json:"title"`
 		Prompt string   `json:"prompt"`
 		Refs   []string `json:"refs"`
+		RepoID string   `json:"repo_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Title == "" {
 		writeJSON(w, 400, errBody("bad_request", "title e prompt obrigatórios"))
 		return
 	}
 	org := a.orgFrom(r)
-	taskID, err := a.DB.CreateRealTask(r.Context(), org, db.DemoWspID, in.Title, in.Prompt)
+	taskID, err := a.DB.CreateRealTask(r.Context(), org, db.DemoWspID, in.Title, in.Prompt, in.RepoID)
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -160,6 +163,47 @@ func (a *API) secrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := a.DB.ListSecrets(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// repos: GET lista; POST registra um repositório (conexão de código + repository).
+func (a *API) repos(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var in struct {
+			Name          string `json:"name"`
+			CloneURL      string `json:"clone_url"`
+			DefaultBranch string `json:"default_branch"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" || in.CloneURL == "" {
+			writeJSON(w, 400, errBody("bad_request", "name e clone_url obrigatórios"))
+			return
+		}
+		if in.DefaultBranch == "" {
+			in.DefaultBranch = "main"
+		}
+		id, err := a.DB.CreateRepo(r.Context(), a.orgFrom(r), db.DemoWspID, in.Name, in.CloneURL, in.DefaultBranch)
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": id})
+		return
+	}
+	rows, err := a.DB.ListRepos(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// prs: GET lista os pull requests abertos pelo executor.
+func (a *API) prs(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListPRs(r.Context(), a.orgFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 .PHONY: dev up down db migrate cerebro executor dashboard logs ps clean smoke \
-        secret ipc-status task steps relay-demo
+        secret ipc-status task steps relay-demo git-remote repo prs pr-demo
 
 dev: ; docker compose up --build
 
@@ -45,3 +45,24 @@ steps: ; @curl -s http://localhost:8088/v1/tasks/$(TASK)/steps; echo
 
 # demo ponta-a-ponta do relay (cria tarefa, espera, mostra o plano)
 relay-demo: ; @bash scripts/relay-demo.sh
+
+# ── M2.2: execução real (clone -> coda -> PR) ──
+
+# semeia um remote git LOCAL (bare) a partir de sample/, p/ demonstrar o pipeline
+# sem precisar de GitHub. p/ usar GitHub real: registre o repo https + token no vault.
+git-remote: ; @docker compose exec -T executor bash -c '\
+	set -e; rm -rf /tmp/seed; git init -q -b main /tmp/seed; cp -r /workspace/. /tmp/seed/; \
+	cd /tmp/seed; git -c user.email=seed@apifor.dev -c user.name=seed add -A; \
+	git -c user.email=seed@apifor.dev -c user.name=seed commit -q -m seed; \
+	rm -rf /remotes/sample.git; git clone -q --bare /tmp/seed /remotes/sample.git; \
+	echo "bare remote: file:///remotes/sample.git"'
+
+# registra um repositório no cérebro (default: o bare remote local)
+repo: ; @curl -s -XPOST http://localhost:8088/v1/repos -H 'content-type: application/json' \
+	-d '{"name":"sample","clone_url":"$(or $(URL),file:///remotes/sample.git)","default_branch":"main"}'; echo
+
+# lista pull requests abertos pelo executor
+prs: ; @curl -s http://localhost:8088/v1/prs; echo
+
+# demo ponta-a-ponta do M2.2: clone -> coda -> commit -> push -> PR
+pr-demo: ; @bash scripts/pr-demo.sh

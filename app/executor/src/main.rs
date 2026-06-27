@@ -10,6 +10,7 @@
 pub mod pb {
     tonic::include_proto!("apifor.v1");
 }
+mod exec;
 mod ipc;
 mod relay;
 mod vault;
@@ -202,6 +203,42 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                     .await?;
                     println!("step completed enviado");
+                }
+            }
+            MsgType::DispatchStep => {
+                if let Some(Payload::DispatchStep(ds)) = &env.payload {
+                    println!("DispatchStep(exec): task={} — clonando/codando/PR LOCAL", ds.task_id);
+                    match exec::run(&ds.task_id, &ds.instructions, &vault).await {
+                        Ok(res) => {
+                            let output = serde_json::json!({"branch": res.branch, "url": res.url}).to_string();
+                            println!("exec ok: branch={} url={}", res.branch, res.url);
+                            tx.send(env_msg(
+                                MsgType::StepCompleted,
+                                Payload::StepEvent(StepEvent {
+                                    step_id: ds.step_id.clone(),
+                                    task_id: ds.task_id.clone(),
+                                    phase: StepPhase::Completed as i32,
+                                    output,
+                                    error: String::new(),
+                                }),
+                            ))
+                            .await?;
+                        }
+                        Err(e) => {
+                            eprintln!("exec falhou: {e}");
+                            tx.send(env_msg(
+                                MsgType::StepFailed,
+                                Payload::StepEvent(StepEvent {
+                                    step_id: ds.step_id.clone(),
+                                    task_id: ds.task_id.clone(),
+                                    phase: StepPhase::Failed as i32,
+                                    output: String::new(),
+                                    error: e,
+                                }),
+                            ))
+                            .await?;
+                        }
+                    }
                 }
             }
             MsgType::RequestPlan => {

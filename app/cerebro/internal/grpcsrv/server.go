@@ -6,7 +6,9 @@ package grpcsrv
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/metadata"
@@ -97,12 +99,32 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 
 		case apiforv1.MsgType_STEP_COMPLETED:
 			ev := env.GetStepEvent()
-			if ev != nil {
-				if err := s.DB.CompleteTask(ctx, ev.GetTaskId()); err != nil {
-					log.Printf("complete err: %v", err)
-				} else {
-					log.Printf("task %s concluída", ev.GetTaskId())
+			if ev == nil {
+				continue
+			}
+			// Exec real (M2.2) reporta um JSON {branch,url}; o step fake do M1 reporta "ok".
+			if out := strings.TrimSpace(ev.GetOutput()); strings.HasPrefix(out, "{") {
+				var r struct{ Branch, Url string }
+				if json.Unmarshal([]byte(out), &r) == nil && r.Branch != "" {
+					if err := s.DB.SaveExecResult(ctx, ev.GetTaskId(), r.Branch, r.Url); err != nil {
+						log.Printf("save exec err: %v", err)
+					} else {
+						log.Printf("PR registrado: task=%s branch=%s url=%s", ev.GetTaskId(), r.Branch, r.Url)
+					}
+					continue
 				}
+			}
+			if err := s.DB.CompleteTask(ctx, ev.GetTaskId()); err != nil {
+				log.Printf("complete err: %v", err)
+			} else {
+				log.Printf("task %s concluída", ev.GetTaskId())
+			}
+
+		case apiforv1.MsgType_STEP_FAILED:
+			ev := env.GetStepEvent()
+			if ev != nil {
+				_ = s.DB.FailTask(ctx, ev.GetTaskId(), ev.GetError())
+				log.Printf("step falhou: task=%s erro=%s", ev.GetTaskId(), ev.GetError())
 			}
 
 		case apiforv1.MsgType_PLAN_RESULT:
@@ -124,8 +146,40 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 			}
 			log.Printf("plano recebido: task=%s steps=%d tokens=%d decisão=%q",
 				pr.GetTaskId(), len(steps), pr.GetTokensUsed(), pr.GetDecision())
+
+			// Se a tarefa tem repositório, despacha o exec real (clone -> coda -> PR).
+			if tr, err := s.DB.GetTaskRepo(ctx, pr.GetTaskId()); err == nil && tr != nil && tr.CloneURL != "" {
+				instr := execInstructions{
+					RepoURL:     tr.CloneURL,
+					BaseBranch:  tr.DefaultBranch,
+					Branch:      "apifor/" + pr.GetTaskId(),
+					ChangeReq:   tr.Prompt,
+					TargetFiles: pr.GetTargetFiles(),
+				}
+				blob, _ := json.Marshal(instr)
+				out <- &apiforv1.Envelope{
+					Type: apiforv1.MsgType_DISPATCH_STEP,
+					Payload: &apiforv1.Envelope_DispatchStep{DispatchStep: &apiforv1.DispatchStep{
+						StepId:       db.NewID("stp"),
+						TaskId:       pr.GetTaskId(),
+						Kind:         apiforv1.StepKind_EXEC,
+						Instructions: string(blob),
+					}},
+				}
+				_ = s.DB.SetTaskStatus(ctx, pr.GetTaskId(), "running")
+				log.Printf("exec despachado: task=%s repo=%s branch=%s", pr.GetTaskId(), tr.CloneURL, instr.Branch)
+			}
 		}
 	}
+}
+
+// execInstructions é o payload (JSON) do DispatchStep(exec) — espelhado no executor.
+type execInstructions struct {
+	RepoURL     string   `json:"repo_url"`
+	BaseBranch  string   `json:"base_branch"`
+	Branch      string   `json:"branch"`
+	ChangeReq   string   `json:"change_request"`
+	TargetFiles []string `json:"target_files"`
 }
 
 // stepKindToType mapeia o enum do proto p/ o enum step_type do schema.

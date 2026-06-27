@@ -59,9 +59,11 @@ services:
     volumes:
       - vaultdata:/var/lib/apifor        # cofre local persistente
       - ./sample:/workspace:ro           # refs de contexto (lidas LOCALMENTE)
+      - gitremotes:/remotes              # remote git local p/ a demo do M2.2
     depends_on:
       cerebro: { condition: service_started }
 
 volumes:
   pgdata:
   vaultdata:
+  gitremotes:
