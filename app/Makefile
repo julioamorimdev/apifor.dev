@@ -16,7 +16,7 @@ cerebro: ; docker compose up -d --build cerebro
 
 executor: ; docker compose up -d --build executor
 
-dashboard: ; pnpm -C dashboard install && pnpm -C dashboard dev
+dashboard: ; cd dashboard && npm install && npm run dev   # http://localhost:3000 (proxy /api -> :8088)
 
 logs: ; docker compose logs -f
 

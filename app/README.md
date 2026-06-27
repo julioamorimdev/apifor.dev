@@ -74,5 +74,10 @@ registro local. REST: `GET|POST /v1/repos`, `GET /v1/prs`; `POST /v1/tasks` acei
 - **M2.2** — execução real: `DispatchStep(exec)` → clone → agente coda (Anthropic/stub)
   → commit → push → PR. Repo/conexão + `pull_request` no Postgres. Validado e2e contra
   um remote git local; caminho GitHub API cabeado (ativa com token no vault).
+- **M2.3** — dashboard (Next/React): telas **Live** (SSE), **Fila**, **Tarefas** (cria
+  tarefa → plano/exec, vê o plano), **Configuração** (repos + segredos só-metadado),
+  **PRs**. `make dashboard` em http://localhost:3000 (proxy `/api` → cérebro :8088).
+  Build limpo; rotas e fluxo completo validados pela API proxy.
 
-Próximo (**M2.3**): canal IPC `kb.import`; telas Configuração/Tarefas/Fila no dashboard.
+Próximo: **M3** (enforcement de plano + billing) ou **M4** (gates do pipeline:
+plan/exec/test/review/merge, agent_profile, merge rules, intervenção).
