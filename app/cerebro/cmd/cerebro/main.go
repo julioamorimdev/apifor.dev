@@ -27,6 +27,7 @@ func main() {
 	httpAddr := envOr("CEREBRO_ADDR", ":8080")
 	grpcAddr := envOr("CEREBRO_GRPC", ":9090")
 	dbURL := envOr("DATABASE_URL", "postgres://postgres:pg@postgres/apifor?sslmode=disable")
+	appURL := os.Getenv("APP_DATABASE_URL") // M6.3: pool com RLS (role não-superuser)
 	secret := envOr("JWT_SECRET", "dev-secret-troque-em-prod")
 
 	// M6.2: aviso de segurança se o segredo do JWT for fraco/padrão.
@@ -34,9 +35,12 @@ func main() {
 		log.Printf("AVISO SEGURANÇA: JWT_SECRET fraco/padrão — defina um segredo forte em produção")
 	}
 
-	database, err := db.Open(ctx, dbURL)
+	database, err := db.Open(ctx, dbURL, appURL)
 	if err != nil {
 		log.Fatalf("db: %v", err)
+	}
+	if database.App != database.Pool {
+		log.Printf("RLS: reads do REST via role apifor_app (enforcement por org)")
 	}
 	if err := database.SeedDemo(ctx); err != nil {
 		log.Fatalf("seed: %v", err)

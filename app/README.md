@@ -242,7 +242,13 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   enforcement, remoção de credenciais demo e cloud/SSO documentados como pendências
   (dependem de refatoração do data layer / infra externa). Validado e2e.
 
-**M3, M4 e M5 completos; M6 em curso.** Próximo: **M6.3** (enforcement de RLS, cloud
+- **M6.3** — **enforcement de RLS (reads)**: role `apifor_app` (não-superuser) + pool
+  dedicado; os reads do REST rodam com `app.current_org` por transação (`SET LOCAL`) e as
+  policies do `002_rls.sql` isolam de fato (queries **sem** `WHERE org_id`). Workers
+  cross-org seguem no pool superuser. Validado no DB (`apifor_app` sem org → 0 linhas;
+  com org → só a sua) e na API (Org A não vê dados da Org B).
+
+**M3, M4 e M5 completos; M6 em curso.** Próximo: **M6.4** (RLS nas escritas, cloud
 workers, SSO/SAML) ou **M7** (empacotamento/launch).
 
 ## Hardening (M6.1)
