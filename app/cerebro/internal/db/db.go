@@ -193,12 +193,13 @@ func (d *DB) ListAudit(ctx context.Context, orgID string, limit int) ([]Row, err
 
 // ── config do pool (liga/desliga + parâmetros) ──
 type PoolCfg struct {
-	ParallelWorkers int  `json:"parallel_workers"`
-	TimeoutMin      int  `json:"timeout_min"`
-	Retries         int  `json:"retries"`
-	Paused          bool `json:"paused"`
-	AutoMerge       bool `json:"auto_merge"`
-	Isolamento      bool `json:"isolamento"`
+	Mode            string `json:"mode"` // "pool" | "pinned"
+	ParallelWorkers int    `json:"parallel_workers"`
+	TimeoutMin      int    `json:"timeout_min"`
+	Retries         int    `json:"retries"`
+	Paused          bool   `json:"paused"`
+	AutoMerge       bool   `json:"auto_merge"`
+	Isolamento      bool   `json:"isolamento"`
 }
 
 func (d *DB) GetPoolConfig(ctx context.Context, orgID string) (PoolCfg, error) {
@@ -209,14 +210,17 @@ func (d *DB) GetPoolConfig(ctx context.Context, orgID string) (PoolCfg, error) {
 	}
 	err := d.Pool.QueryRow(ctx, `SELECT parallel_workers, COALESCE(timeout_min,15), retries,
 		COALESCE((behavior->>'paused')::bool,false), COALESCE((behavior->>'auto_merge')::bool,false),
-		COALESCE((behavior->>'isolamento')::bool,true)
-		FROM pool_config WHERE workspace_id=$1`, wsp).Scan(&c.ParallelWorkers, &c.TimeoutMin, &c.Retries, &c.Paused, &c.AutoMerge, &c.Isolamento)
+		COALESCE((behavior->>'isolamento')::bool,true), COALESCE(NULLIF(behavior->>'mode',''),'pool')
+		FROM pool_config WHERE workspace_id=$1`, wsp).Scan(&c.ParallelWorkers, &c.TimeoutMin, &c.Retries, &c.Paused, &c.AutoMerge, &c.Isolamento, &c.Mode)
 	return c, err
 }
 
 func (d *DB) UpdatePoolConfig(ctx context.Context, orgID string, c PoolCfg) error {
 	wsp := d.FirstWorkspace(ctx, orgID)
-	beh, _ := json.Marshal(map[string]bool{"paused": c.Paused, "auto_merge": c.AutoMerge, "isolamento": c.Isolamento})
+	if c.Mode != "pinned" {
+		c.Mode = "pool"
+	}
+	beh, _ := json.Marshal(map[string]any{"paused": c.Paused, "auto_merge": c.AutoMerge, "isolamento": c.Isolamento, "mode": c.Mode})
 	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `UPDATE pool_config SET parallel_workers=$2, timeout_min=$3, retries=$4, behavior=$5::jsonb WHERE workspace_id=$1`,
 			wsp, c.ParallelWorkers, c.TimeoutMin, c.Retries, string(beh))
@@ -232,6 +236,67 @@ func (d *DB) poolFlag(ctx context.Context, orgID, key string) bool {
 }
 func (d *DB) PoolPaused(ctx context.Context, orgID string) bool    { return d.poolFlag(ctx, orgID, "paused") }
 func (d *DB) PoolAutoMerge(ctx context.Context, orgID string) bool { return d.poolFlag(ctx, orgID, "auto_merge") }
+func (d *DB) PoolMode(ctx context.Context, orgID string) string {
+	var v string
+	wsp := d.FirstWorkspace(ctx, orgID)
+	_ = d.Pool.QueryRow(ctx, `SELECT COALESCE(NULLIF(behavior->>'mode',''),'pool') FROM pool_config WHERE workspace_id=$1`, wsp).Scan(&v)
+	if v == "" {
+		v = "pool"
+	}
+	return v
+}
+
+// ── pinned workers (modo dedicado) ──
+func (d *DB) CreatePinnedWorker(ctx context.Context, orgID, focus, repoID, model string, concurrency int) (string, error) {
+	wsp := d.FirstWorkspace(ctx, orgID)
+	id := NewID("pwk")
+	var rid *string
+	if repoID != "" {
+		rid = &repoID
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	st, _ := json.Marshal(map[string]string{"model": model})
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO pinned_worker(id,org_id,workspace_id,repo_id,focus,concurrency,settings)
+			VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, id, orgID, wsp, rid, focus, concurrency, string(st))
+		return e
+	})
+	return id, err
+}
+
+func (d *DB) ListPinnedWorkers(ctx context.Context, orgID string) ([]Row, error) {
+	return d.orgList(ctx, orgID, `SELECT p.id, COALESCE(p.focus,'') AS focus, COALESCE(p.repo_id,'') AS repo_id,
+		COALESCE(r.name,'') AS repo_name, p.concurrency, COALESCE(p.settings->>'model','claude_opus') AS model
+		FROM pinned_worker p LEFT JOIN repository r ON r.id=p.repo_id ORDER BY p.created_at DESC`)
+}
+
+func (d *DB) DeletePinnedWorker(ctx context.Context, orgID, id string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM pinned_worker WHERE id=$1 AND org_id=$2`, id, orgID)
+		return e
+	})
+}
+
+// PinnedConcurrency — soma da concorrência dos workers pinned (cap em modo pinned).
+func (d *DB) PinnedConcurrency(ctx context.Context, orgID string) int {
+	var n int
+	wsp := d.FirstWorkspace(ctx, orgID)
+	_ = d.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(concurrency),0) FROM pinned_worker WHERE workspace_id=$1`, wsp).Scan(&n)
+	return n
+}
+
+// PinnedModelForRepo — modelo do worker pinned daquele repo (vazio se não houver).
+func (d *DB) PinnedModelForRepo(ctx context.Context, orgID, repoID string) string {
+	if repoID == "" {
+		return ""
+	}
+	var m string
+	wsp := d.FirstWorkspace(ctx, orgID)
+	_ = d.Pool.QueryRow(ctx, `SELECT COALESCE(settings->>'model','') FROM pinned_worker WHERE workspace_id=$1 AND repo_id=$2 LIMIT 1`, wsp, repoID).Scan(&m)
+	return m
+}
 
 func (d *DB) ListConnections(ctx context.Context, orgID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id, type::text AS type, provider, COALESCE(label,'') AS label,
@@ -709,14 +774,15 @@ type TaskRepo struct {
 	DefaultBranch string
 	Prompt        string
 	OrgID         string
+	RepoID        string
 }
 
 func (d *DB) GetTaskRepo(ctx context.Context, taskID string) (*TaskRepo, error) {
 	var tr TaskRepo
 	err := d.Pool.QueryRow(ctx, `SELECT COALESCE(r.settings->>'clone_url',''),COALESCE(r.default_branch,'main'),
-		COALESCE(t.description,''),t.org_id
+		COALESCE(t.description,''),t.org_id,COALESCE(t.repo_id,'')
 		FROM task t LEFT JOIN repository r ON r.id=t.repo_id WHERE t.id=$1`, taskID).
-		Scan(&tr.CloneURL, &tr.DefaultBranch, &tr.Prompt, &tr.OrgID)
+		Scan(&tr.CloneURL, &tr.DefaultBranch, &tr.Prompt, &tr.OrgID, &tr.RepoID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

@@ -25,7 +25,7 @@ func TestCanRBAC(t *testing.T) {
 }
 
 func TestRpmForPlan(t *testing.T) {
-	cases := map[string]int64{"free": 60, "pro": 300, "team": 1000, "enterprise": 0, "qualquer": 0}
+	cases := map[string]int64{"free": 240, "pro": 600, "team": 2000, "enterprise": 0, "qualquer": 0}
 	for plan, want := range cases {
 		if got := rpmForPlan(plan); got != want {
 			t.Errorf("rpmForPlan(%q)=%d, quero %d", plan, got, want)

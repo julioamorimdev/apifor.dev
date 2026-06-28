@@ -80,6 +80,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/logs", a.logs)                         // GET feed de logs (steps)
 	mux.HandleFunc("/v1/pool", a.pool)                         // GET config do pool / POST atualiza (manage)
 	mux.HandleFunc("/v1/connections", a.connections)           // GET conexões
+	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
+	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
 	mux.HandleFunc("/v1/telemetry", a.telemetry)               // GET agregado
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
@@ -788,6 +790,60 @@ func (a *API) connections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).
+func (a *API) pinnedWorkers(w http.ResponseWriter, r *http.Request) {
+	org := a.orgFrom(r)
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "manage") {
+			return
+		}
+		var body struct {
+			Focus       string `json:"focus"`
+			RepoID      string `json:"repo_id"`
+			Model       string `json:"model"`
+			Concurrency int    `json:"concurrency"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 400, errBody("bad_request", err.Error()))
+			return
+		}
+		if body.Model == "" {
+			body.Model = "claude_opus"
+		}
+		id, err := a.DB.CreatePinnedWorker(r.Context(), org, body.Focus, body.RepoID, body.Model, body.Concurrency)
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "pinned.create", "pinned_worker", id)
+		writeJSON(w, 200, map[string]any{"id": id})
+		return
+	}
+	rows, err := a.DB.ListPinnedWorkers(r.Context(), org)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) pinnedWorkerByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/v1/pinned-workers/")
+	if id == "" || r.Method != http.MethodDelete {
+		writeJSON(w, 404, errBody("not_found", "use DELETE /v1/pinned-workers/{id}"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	if err := a.DB.DeletePinnedWorker(r.Context(), a.orgFrom(r), id); err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	a.recordAudit(r, "pinned.delete", "pinned_worker", id)
+	writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
 }
 
 func (a *API) qa(w http.ResponseWriter, r *http.Request) {
