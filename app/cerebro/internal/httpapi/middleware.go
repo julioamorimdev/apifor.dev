@@ -117,9 +117,26 @@ func rateLimitable(path string) bool {
 	return !strings.HasSuffix(path, "/stream") // SSE são conexões longas
 }
 
+// publicPath: rotas que dispensam autenticação mesmo com REQUIRE_AUTH.
+func publicPath(path string) bool {
+	switch path {
+	case "/healthz", "/metrics", "/v1/ca", "/v1/auth/login", "/v1/auth/register", "/v1/billing/webhook":
+		return true
+	}
+	return false
+}
+
 func (a *API) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.metrics.requests.Add(1)
+		// M6.2: exige JWT quando RequireAuth (fecha o fallback dev demo-owner).
+		if a.RequireAuth && r.Method != http.MethodOptions && !publicPath(r.URL.Path) {
+			if uid, _, _ := a.authz(r); uid == "" {
+				a.metrics.record(401)
+				writeJSON(w, 401, errBody("unauthorized", "autenticação obrigatória"))
+				return
+			}
+		}
 		if r.Method != http.MethodOptions && rateLimitable(r.URL.Path) {
 			if !a.rl.allow(r.Context(), a.orgFrom(r)) {
 				a.metrics.rateLimited.Add(1)

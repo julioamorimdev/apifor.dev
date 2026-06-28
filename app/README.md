@@ -236,8 +236,14 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   exceder), **observabilidade** (`/metrics` Prometheus: requests, 429, classes, gauges).
   Tela **Auditoria**. Validado e2e.
 
-**M3, M4 e M5 completos; M6 em curso.** Próximo: **M6.2** (cloud workers, SSO/SAML,
-enforcement de RLS, security review) ou **M7** (empacotamento/launch).
+- **M6.2** — **security review** (ver [SECURITY.md](../SECURITY.md)) + correções:
+  **`REQUIRE_AUTH`** fecha o fallback dev "demo owner" (401 sem JWT); **CSV injection**
+  neutralizada no export de auditoria; **aviso de `JWT_SECRET` fraco** no boot. RLS
+  enforcement, remoção de credenciais demo e cloud/SSO documentados como pendências
+  (dependem de refatoração do data layer / infra externa). Validado e2e.
+
+**M3, M4 e M5 completos; M6 em curso.** Próximo: **M6.3** (enforcement de RLS, cloud
+workers, SSO/SAML) ou **M7** (empacotamento/launch).
 
 ## Hardening (M6.1)
 

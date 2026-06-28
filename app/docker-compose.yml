@@ -59,6 +59,8 @@ services:
       PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3000}"
       # M4.1: gate de merge — exigir revisão humana (false = auto-merge)
       MERGE_REQUIRE_HUMAN: "${MERGE_REQUIRE_HUMAN:-}"
+      # M6.2: exige JWT (fecha o fallback dev "demo owner"). default off p/ as demos.
+      REQUIRE_AUTH: "${REQUIRE_AUTH:-}"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:

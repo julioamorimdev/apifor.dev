@@ -40,6 +40,8 @@ type API struct {
 	// M6.1: observabilidade + rate limit
 	metrics *Metrics
 	rl      *RateLimiter
+	// M6.2: segurança — exige JWT (fecha o fallback dev "demo owner")
+	RequireAuth bool
 }
 
 func (a *API) Routes() http.Handler {
@@ -150,7 +152,8 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]string{"access_token": tok, "org_id": oid, "role": "owner"})
 }
 
-// authz extrai (userID, orgID, role) do JWT. Sem token válido cai no demo (dev) como owner.
+// authz extrai (userID, orgID, role) do JWT. Sem token válido: cai no demo (dev) como
+// owner SE RequireAuth=false; com RequireAuth=true devolve vazio (não autenticado).
 func (a *API) authz(r *http.Request) (userID, orgID, role string) {
 	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if c, err := a.Auth.Parse(t); err == nil && c.OrgID != "" {
@@ -159,6 +162,9 @@ func (a *API) authz(r *http.Request) (userID, orgID, role string) {
 			role = "member"
 		}
 		return c.Subject, c.OrgID, role
+	}
+	if a.RequireAuth {
+		return "", "", ""
 	}
 	return db.DemoUserID, db.DemoOrgID, "owner"
 }
@@ -237,8 +243,20 @@ func (a *API) auditExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=audit.csv")
 	fmt.Fprintln(w, "when,actor_type,actor_id,action,target_type,target_id")
 	for _, x := range rows {
-		fmt.Fprintf(w, "%v,%v,%v,%v,%v,%v\n", x["when"], x["actor_type"], x["actor_id"], x["action"], x["target_type"], x["target_id"])
+		fmt.Fprintf(w, "%s,%s,%s,%s,%s,%s\n",
+			csvField(x["when"]), csvField(x["actor_type"]), csvField(x["actor_id"]),
+			csvField(x["action"]), csvField(x["target_type"]), csvField(x["target_id"]))
 	}
+}
+
+// csvField cita o campo e neutraliza injeção de fórmula (=,+,-,@) no CSV.
+func csvField(v any) string {
+	s := fmt.Sprintf("%v", v)
+	if s != "" && strings.ContainsAny(s[:1], "=+-@") {
+		s = "'" + s
+	}
+	s = strings.ReplaceAll(s, `"`, `""`)
+	return `"` + s + `"`
 }
 
 // me: org + papel do token atual.

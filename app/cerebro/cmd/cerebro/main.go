@@ -29,6 +29,11 @@ func main() {
 	dbURL := envOr("DATABASE_URL", "postgres://postgres:pg@postgres/apifor?sslmode=disable")
 	secret := envOr("JWT_SECRET", "dev-secret-troque-em-prod")
 
+	// M6.2: aviso de segurança se o segredo do JWT for fraco/padrão.
+	if len(secret) < 24 || secret == "dev-secret" || secret == "dev-secret-troque-em-prod" {
+		log.Printf("AVISO SEGURANÇA: JWT_SECRET fraco/padrão — defina um segredo forte em produção")
+	}
+
 	database, err := db.Open(ctx, dbURL)
 	if err != nil {
 		log.Fatalf("db: %v", err)
@@ -91,6 +96,7 @@ func main() {
 		StripePrices:        map[string]string{"pro": os.Getenv("STRIPE_PRICE_PRO"), "team": os.Getenv("STRIPE_PRICE_TEAM")},
 		DunningGraceSec:     atoiEnv("DUNNING_GRACE_SEC"),
 		PublicURL:           envOr("PUBLIC_URL", "http://localhost:3000"),
+		RequireAuth:         os.Getenv("REQUIRE_AUTH") == "true", // M6.2: fecha o fallback dev
 	}
 	log.Printf("HTTP ouvindo em %s", httpAddr)
 	if err := http.ListenAndServe(httpAddr, api.Routes()); err != nil {
