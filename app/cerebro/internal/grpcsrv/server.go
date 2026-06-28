@@ -266,7 +266,7 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 			log.Printf("pipeline: review IA reprovou task=%s -> failed", taskID)
 			return
 		}
-		if s.MergeRequireHuman {
+		if s.mergeGate(ctx, taskID) {
 			if ok, _ := s.DB.HumanApproved(ctx, taskID); !ok {
 				_ = s.DB.SetTaskBlocked(ctx, taskID, "human_review")
 				s.DB.CreateNotification(ctx, org, "intervention", "Revisão humana pendente", "uma tarefa aguarda aprovação", "/interventions")
@@ -281,6 +281,15 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 		s.DB.CreateNotification(ctx, org, "merge", "Tarefa concluída", "merge realizado", "/prs")
 		log.Printf("pipeline: MERGED task=%s url=%s", taskID, r.Url)
 	}
+}
+
+// mergeGate: exige revisão humana antes do merge, a menos que o pool da org esteja
+// com auto-merge ligado (Configuração → Workers).
+func (s *Server) mergeGate(ctx context.Context, taskID string) bool {
+	if !s.MergeRequireHuman {
+		return false
+	}
+	return !s.DB.PoolAutoMerge(ctx, s.taskOrg(ctx, taskID))
 }
 
 // taskOrg resolve a org de uma tarefa (p/ notificações).
@@ -320,7 +329,7 @@ func (s *Server) reconcileTask(ctx context.Context, taskID string) {
 		log.Printf("reconcile: task=%s retomando REVIEW", taskID)
 		s.dispatchStep(ctx, taskID, apiforv1.StepKind_REVIEW, s.DB.GetAgentModel(ctx, "reviewer"))
 	case ps.AIStatus == "approved":
-		if s.MergeRequireHuman && ps.HuStatus != "approved" {
+		if s.mergeGate(ctx, taskID) && ps.HuStatus != "approved" {
 			_ = s.DB.SetTaskBlocked(ctx, taskID, "human_review")
 			return
 		}

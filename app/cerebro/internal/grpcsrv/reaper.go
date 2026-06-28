@@ -59,6 +59,9 @@ func (c EnforceConfig) capSec(pl *db.PlanLimits) int {
 
 // tryGrant aplica as travas e, se passar, concede o lease. Retorna o motivo da negação.
 func (s *Server) tryGrant(ctx context.Context, orgID, wspID string) (*apiforv1.LeaseGranted, string) {
+	if s.DB.PoolPaused(ctx, orgID) {
+		return nil, "pool_paused"
+	}
 	pl, err := s.DB.GetPlanLimits(ctx, orgID)
 	if err != nil || pl == nil {
 		return nil, "no_plan"

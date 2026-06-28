@@ -191,6 +191,54 @@ func (d *DB) ListAudit(ctx context.Context, orgID string, limit int) ([]Row, err
 		FROM audit_log ORDER BY occurred_at DESC LIMIT $1`, limit)
 }
 
+// ── config do pool (liga/desliga + parâmetros) ──
+type PoolCfg struct {
+	ParallelWorkers int  `json:"parallel_workers"`
+	TimeoutMin      int  `json:"timeout_min"`
+	Retries         int  `json:"retries"`
+	Paused          bool `json:"paused"`
+	AutoMerge       bool `json:"auto_merge"`
+	Isolamento      bool `json:"isolamento"`
+}
+
+func (d *DB) GetPoolConfig(ctx context.Context, orgID string) (PoolCfg, error) {
+	var c PoolCfg
+	wsp := d.FirstWorkspace(ctx, orgID)
+	if wsp == "" {
+		return c, errors.New("sem workspace")
+	}
+	err := d.Pool.QueryRow(ctx, `SELECT parallel_workers, COALESCE(timeout_min,15), retries,
+		COALESCE((behavior->>'paused')::bool,false), COALESCE((behavior->>'auto_merge')::bool,false),
+		COALESCE((behavior->>'isolamento')::bool,true)
+		FROM pool_config WHERE workspace_id=$1`, wsp).Scan(&c.ParallelWorkers, &c.TimeoutMin, &c.Retries, &c.Paused, &c.AutoMerge, &c.Isolamento)
+	return c, err
+}
+
+func (d *DB) UpdatePoolConfig(ctx context.Context, orgID string, c PoolCfg) error {
+	wsp := d.FirstWorkspace(ctx, orgID)
+	beh, _ := json.Marshal(map[string]bool{"paused": c.Paused, "auto_merge": c.AutoMerge, "isolamento": c.Isolamento})
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE pool_config SET parallel_workers=$2, timeout_min=$3, retries=$4, behavior=$5::jsonb WHERE workspace_id=$1`,
+			wsp, c.ParallelWorkers, c.TimeoutMin, c.Retries, string(beh))
+		return e
+	})
+}
+
+func (d *DB) poolFlag(ctx context.Context, orgID, key string) bool {
+	var v bool
+	wsp := d.FirstWorkspace(ctx, orgID)
+	_ = d.Pool.QueryRow(ctx, `SELECT COALESCE((behavior->>$2)::bool,false) FROM pool_config WHERE workspace_id=$1`, wsp, key).Scan(&v)
+	return v
+}
+func (d *DB) PoolPaused(ctx context.Context, orgID string) bool    { return d.poolFlag(ctx, orgID, "paused") }
+func (d *DB) PoolAutoMerge(ctx context.Context, orgID string) bool { return d.poolFlag(ctx, orgID, "auto_merge") }
+
+func (d *DB) ListConnections(ctx context.Context, orgID string) ([]Row, error) {
+	return d.orgList(ctx, orgID, `SELECT id, type::text AS type, provider, COALESCE(label,'') AS label,
+		status::text AS status, to_char(created_at,'YYYY-MM-DD HH24:MI') AS created
+		FROM connection ORDER BY created_at DESC`)
+}
+
 // GetOrgPlan devolve o plano da org (p/ rate limit por plano).
 func (d *DB) GetOrgPlan(ctx context.Context, orgID string) string {
 	var p string

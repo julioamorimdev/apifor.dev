@@ -78,6 +78,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/routines/", a.routineAction)           // POST /{id}/run|enable|disable, DELETE /{id}
 	mux.HandleFunc("/v1/ci", a.ci)                             // GET ci_runs
 	mux.HandleFunc("/v1/logs", a.logs)                         // GET feed de logs (steps)
+	mux.HandleFunc("/v1/pool", a.pool)                         // GET config do pool / POST atualiza (manage)
+	mux.HandleFunc("/v1/connections", a.connections)           // GET conexões
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
 	mux.HandleFunc("/v1/telemetry", a.telemetry)               // GET agregado
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
@@ -744,6 +746,43 @@ func (a *API) ci(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) logs(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.ListLogs(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// pool: GET config do pool; POST atualiza (liga/desliga, paralelo, retries, auto-merge).
+func (a *API) pool(w http.ResponseWriter, r *http.Request) {
+	org := a.orgFrom(r)
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "manage") {
+			return
+		}
+		var c db.PoolCfg
+		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+			writeJSON(w, 400, errBody("bad_request", err.Error()))
+			return
+		}
+		if err := a.DB.UpdatePoolConfig(r.Context(), org, c); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "pool.update", "pool", "")
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	c, err := a.DB.GetPoolConfig(r.Context(), org)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+func (a *API) connections(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListConnections(r.Context(), a.orgFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
