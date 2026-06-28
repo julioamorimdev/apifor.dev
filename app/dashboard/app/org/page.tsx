@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { Page, PageHead, apiDelete, apiGet, apiPost, badge, btn, card, cell, input, setToken, tableStyle } from "../ui";
+import { apiDelete, apiGet, apiPost, badge, btn, card, CardHead, cell, codeDim, input, Page, PageHead, setToken, tableStyle, thCell } from "../ui";
 
 type Me = { org_id: string; role: string };
 type Member = { id: string; email: string; name: string; role: string; status: string };
@@ -40,40 +40,40 @@ export default function Org() {
   return (
     <Page>
       <PageHead eyebrow="Conta & cobrança" title="Organização" subtitle="Sessão, membros e workspaces." />
-      <h3 style={{ color: "var(--dim)" }}>Sessão</h3>
-      <div style={{ ...card, padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ color: "var(--mute)" }}>org:</span> <code>{me?.org_id || "—"}</code>
-        <span style={{ color: "var(--mute)" }}>papel:</span> <span style={badge(me?.role === "owner" ? "open" : "idle")}>{me?.role || "—"}</span>
-        <span style={{ flex: 1 }} />
-        <input style={{ ...input, width: 150 }} placeholder="email" value={f.email} onChange={(e) => set("email", e.target.value)} />
-        <input style={{ ...input, width: 110 }} type="password" placeholder="senha" value={f.password} onChange={(e) => set("password", e.target.value)} />
-        {authMode === "register" && <input style={{ ...input, width: 120 }} placeholder="nome da org" value={f.org} onChange={(e) => set("org", e.target.value)} />}
-        <button style={btn} onClick={auth}>{authMode === "login" ? "Entrar" : "Criar org"}</button>
-        <a onClick={() => setAuthMode(authMode === "login" ? "register" : "login")} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13 }}>{authMode === "login" ? "registrar" : "fazer login"}</a>
-        <button style={{ ...btn, background: "#2A2D34", color: "var(--dim)" }} onClick={logout}>sair</button>
+
+      <div style={card}>
+        <CardHead title="Sessão" right={<span style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}><span style={{ color: "var(--mute)" }}>{me?.org_id || "—"}</span><span style={badge(me?.role === "owner" ? "open" : "idle")}>{me?.role || "—"}</span></span>} />
+        <div style={{ padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input style={{ ...input, width: 160 }} placeholder="email" value={f.email} onChange={(e) => set("email", e.target.value)} />
+          <input style={{ ...input, width: 120 }} type="password" placeholder="senha" value={f.password} onChange={(e) => set("password", e.target.value)} />
+          {authMode === "register" && <input style={{ ...input, width: 130 }} placeholder="nome da org" value={f.org} onChange={(e) => set("org", e.target.value)} />}
+          <button style={btn} onClick={auth}>{authMode === "login" ? "Entrar" : "Criar org"}</button>
+          <a onClick={() => setAuthMode(authMode === "login" ? "register" : "login")} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13 }}>{authMode === "login" ? "registrar" : "fazer login"}</a>
+          <button style={{ ...btn, background: "var(--elev)", color: "var(--dim)" }} onClick={logout}>sair</button>
+        </div>
       </div>
 
-      <h3 style={{ color: "var(--dim)" }}>Membros</h3>
-      {canManage && (
-        <div style={{ ...card, padding: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <input style={{ ...input, flex: 1, minWidth: 150 }} placeholder="email" value={f.mEmail} onChange={(e) => set("mEmail", e.target.value)} />
-          <input style={{ ...input, width: 120 }} type="password" placeholder="senha" value={f.mPassword} onChange={(e) => set("mPassword", e.target.value)} />
-          <select style={{ ...input, width: 130 }} value={f.mRole} onChange={(e) => set("mRole", e.target.value)}>
-            {["admin", "member", "billing", "viewer"].map((x) => <option key={x} value={x}>{x}</option>)}
-          </select>
-          <button style={btn} onClick={addMember}>Adicionar</button>
-        </div>
-      )}
       <div style={card}>
+        <CardHead title="Membros" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>{members.length}</span>} />
+        {canManage && (
+          <div style={{ padding: 16, display: "flex", gap: 10, flexWrap: "wrap", borderBottom: "1px solid var(--border)" }}>
+            <input style={{ ...input, flex: 1, minWidth: 150 }} placeholder="email" value={f.mEmail} onChange={(e) => set("mEmail", e.target.value)} />
+            <input style={{ ...input, width: 120 }} type="password" placeholder="senha" value={f.mPassword} onChange={(e) => set("mPassword", e.target.value)} />
+            <select style={{ ...input, width: 130 }} value={f.mRole} onChange={(e) => set("mRole", e.target.value)}>
+              {["admin", "member", "billing", "viewer"].map((x) => <option key={x} value={x}>{x}</option>)}
+            </select>
+            <button style={btn} onClick={addMember}>Adicionar</button>
+          </div>
+        )}
         <table style={tableStyle}>
-          <thead><tr><th style={cell}>email</th><th style={cell}>papel</th><th style={cell}>status</th><th style={cell}></th></tr></thead>
+          <thead><tr><th style={thCell}>Email</th><th style={thCell}>Papel</th><th style={thCell}>Status</th><th style={{ ...thCell, textAlign: "right" }}></th></tr></thead>
           <tbody>
             {members.map((m) => (
               <tr key={m.id}>
                 <td style={cell}>{m.email}</td>
                 <td style={cell}><span style={badge(m.role === "owner" ? "open" : "idle")}>{m.role}</span></td>
                 <td style={cell}>{m.status}</td>
-                <td style={cell}>{canManage && m.role !== "owner" && <a onClick={() => removeMember(m.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>remover</a>}</td>
+                <td style={{ ...cell, textAlign: "right" }}>{canManage && m.role !== "owner" && <a onClick={() => removeMember(m.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>remover</a>}</td>
               </tr>
             ))}
             {!members.length && <tr><td style={cell} colSpan={4}>nenhum membro (faça login)</td></tr>}
@@ -81,19 +81,19 @@ export default function Org() {
         </table>
       </div>
 
-      <h3 style={{ color: "var(--dim)" }}>Workspaces</h3>
-      {canManage && (
-        <div style={{ ...card, padding: 16, display: "flex", gap: 10 }}>
-          <input style={{ ...input, flex: 1 }} placeholder="nome do workspace" value={f.ws} onChange={(e) => set("ws", e.target.value)} />
-          <button style={btn} onClick={addWs}>Criar</button>
-        </div>
-      )}
       <div style={card}>
+        <CardHead title="Workspaces" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>{workspaces.length}</span>} />
+        {canManage && (
+          <div style={{ padding: 16, display: "flex", gap: 10, borderBottom: "1px solid var(--border)" }}>
+            <input style={{ ...input, flex: 1 }} placeholder="nome do workspace" value={f.ws} onChange={(e) => set("ws", e.target.value)} />
+            <button style={btn} onClick={addWs}>Criar</button>
+          </div>
+        )}
         <table style={tableStyle}>
-          <thead><tr><th style={cell}>workspace</th><th style={cell}>id</th></tr></thead>
+          <thead><tr><th style={thCell}>Workspace</th><th style={thCell}>ID</th></tr></thead>
           <tbody>
             {workspaces.map((ws) => (
-              <tr key={ws.id}><td style={cell}>{ws.name}</td><td style={cell}><code style={{ fontSize: 12 }}>{ws.id}</code></td></tr>
+              <tr key={ws.id}><td style={cell}>{ws.name}</td><td style={cell}><span style={codeDim}>{ws.id}</span></td></tr>
             ))}
             {!workspaces.length && <tr><td style={cell} colSpan={2}>nenhum workspace</td></tr>}
           </tbody>
