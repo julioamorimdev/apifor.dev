@@ -89,9 +89,17 @@ func (d *DB) CreateDevice(ctx context.Context, orgID, userID, token string) (str
 
 type Device struct{ ID, OrgID string }
 
-func (d *DB) FindDeviceByToken(ctx context.Context, token string) (*Device, error) {
+// CreateDeviceCert registra o device com o serial do cert assinado pela CA (M3.2a, mTLS).
+func (d *DB) CreateDeviceCert(ctx context.Context, orgID, userID, deviceID, serial string, expires time.Time) error {
+	_, err := d.Pool.Exec(ctx, `INSERT INTO device(id,org_id,user_id,label,cert_serial,cert_expires_at,last_seen_at)
+		VALUES($1,$2,$3,'executor',$4,$5,now())`, deviceID, orgID, userID, serial, expires)
+	return err
+}
+
+// FindDeviceBySerial resolve o device pelo serial do cert (não-revogado) — auth da stream.
+func (d *DB) FindDeviceBySerial(ctx context.Context, serial string) (*Device, error) {
 	var dev Device
-	err := d.Pool.QueryRow(ctx, `SELECT id,org_id FROM device WHERE cert_serial=$1 AND revoked_at IS NULL LIMIT 1`, token).
+	err := d.Pool.QueryRow(ctx, `SELECT id,org_id FROM device WHERE cert_serial=$1 AND revoked_at IS NULL LIMIT 1`, serial).
 		Scan(&dev.ID, &dev.OrgID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

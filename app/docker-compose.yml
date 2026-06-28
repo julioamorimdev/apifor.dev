@@ -48,6 +48,9 @@ services:
       WORKER_HOURS_CAP_SEC: "${WORKER_HOURS_CAP_SEC:-}"
       REAPER_TICK_SEC: "${REAPER_TICK_SEC:-}"
       GRACE_SEC: "${GRACE_SEC:-}"
+      CEREBRO_PKI_DIR: "/var/lib/cerebro"
+    volumes:
+      - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:
       migrate: { condition: service_completed_successfully }
     ports: ["8088:8080", "9090:9090"]
@@ -56,7 +59,7 @@ services:
     build: ./executor
     environment:
       CEREBRO_HTTP: "http://cerebro:8080"
-      CEREBRO_GRPC: "http://cerebro:9090"
+      CEREBRO_GRPC: "https://cerebro:9090"
       APIFOR_HOME: "/var/lib/apifor"
       APIFOR_WORKDIR: "/workspace"
       # M3.1: pede N leases extras no boot p/ demonstrar a trava max_workers (0 = nenhum)
@@ -74,3 +77,4 @@ volumes:
   pgdata:
   vaultdata:
   gitremotes:
+  cadata:

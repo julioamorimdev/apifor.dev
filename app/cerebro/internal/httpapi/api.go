@@ -20,9 +20,10 @@ type Pusher interface {
 }
 
 type API struct {
-	DB   *db.DB
-	Auth *auth.Auth
-	Hub  Pusher
+	DB        *db.DB
+	Auth      *auth.Auth
+	Hub       Pusher
+	CACertPEM []byte // cert público da CA (bootstrap mTLS via GET /v1/ca)
 	// overrides de enforcement (espelham o reaper) p/ exibir cap/TTL efetivos em /v1/usage
 	HoursCapOverrideSec int
 	LeaseTTLOverrideSec int
@@ -31,6 +32,7 @@ type API struct {
 func (a *API) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", a.health)
+	mux.HandleFunc("/v1/ca", a.caCert) // bootstrap público da CA (mTLS)
 	mux.HandleFunc("/v1/auth/login", a.login)
 	mux.HandleFunc("/v1/workers", a.workers)
 	mux.HandleFunc("/v1/tasks", a.tasks)           // GET lista, POST cria (dispara relay)
@@ -47,7 +49,13 @@ func (a *API) Routes() http.Handler {
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]string{"service": "cerebro", "status": "ok", "milestone": "M2.1"})
+	writeJSON(w, 200, map[string]string{"service": "cerebro", "status": "ok", "milestone": "M3.2a"})
+}
+
+// caCert serve o cert público da CA (bootstrap do mTLS; o executor confia nele).
+func (a *API) caCert(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_, _ = w.Write(a.CACertPEM)
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {

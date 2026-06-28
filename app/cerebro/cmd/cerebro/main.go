@@ -4,18 +4,21 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net"
 	"net/http"
 	"os"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"apifor.dev/cerebro/gen/apiforv1"
 	"apifor.dev/cerebro/internal/auth"
 	"apifor.dev/cerebro/internal/db"
 	"apifor.dev/cerebro/internal/grpcsrv"
 	"apifor.dev/cerebro/internal/httpapi"
+	"apifor.dev/cerebro/internal/pki"
 )
 
 func main() {
@@ -36,20 +39,37 @@ func main() {
 
 	a := auth.New(secret)
 	hub := grpcsrv.NewHub() // ponte REST -> stream do executor (relay)
-	srv := &grpcsrv.Server{DB: database, Auth: a, Hub: hub, Cfg: grpcsrv.EnforceConfigFromEnv()}
+
+	// PKI: CA própria + cert de servidor (M3.2a — mTLS real)
+	ca, err := pki.EnsureCA(envOr("CEREBRO_PKI_DIR", "/var/lib/cerebro"))
+	if err != nil {
+		log.Fatalf("pki: %v", err)
+	}
+	serverCert, err := ca.ServerTLSCert([]string{"cerebro", "localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
+	if err != nil {
+		log.Fatalf("pki server cert: %v", err)
+	}
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.VerifyClientCertIfGiven, // Enroll sem cert; Stream com cert de device
+		ClientCAs:    ca.Pool(),
+	}
+	log.Printf("PKI pronta: CA carregada, gRPC com mTLS")
+
+	srv := &grpcsrv.Server{DB: database, Auth: a, Hub: hub, CA: ca, Cfg: grpcsrv.EnforceConfigFromEnv()}
 
 	// reaper de enforcement (lease TTL, worker-hours, kill-switch) — server-side
 	go srv.RunReaper(ctx)
 
-	// gRPC
+	// gRPC (mTLS)
 	go func() {
 		lis, err := net.Listen("tcp", grpcAddr)
 		if err != nil {
 			log.Fatalf("grpc listen: %v", err)
 		}
-		gs := grpc.NewServer()
+		gs := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
 		apiforv1.RegisterOrchestratorServer(gs, srv)
-		log.Printf("gRPC ouvindo em %s", grpcAddr)
+		log.Printf("gRPC (mTLS) ouvindo em %s", grpcAddr)
 		if err := gs.Serve(lis); err != nil {
 			log.Fatalf("grpc serve: %v", err)
 		}
@@ -57,7 +77,7 @@ func main() {
 
 	// HTTP
 	api := &httpapi.API{
-		DB: database, Auth: a, Hub: hub,
+		DB: database, Auth: a, Hub: hub, CACertPEM: ca.CertPEM,
 		HoursCapOverrideSec: srv.Cfg.HoursCapOverrideSec,
 		LeaseTTLOverrideSec: srv.Cfg.LeaseTTLOverrideSec,
 	}

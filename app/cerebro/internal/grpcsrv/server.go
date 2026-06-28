@@ -11,11 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 
 	"apifor.dev/cerebro/gen/apiforv1"
 	"apifor.dev/cerebro/internal/auth"
 	"apifor.dev/cerebro/internal/db"
+	"apifor.dev/cerebro/internal/pki"
 )
 
 type Server struct {
@@ -23,38 +25,50 @@ type Server struct {
 	DB   *db.DB
 	Auth *auth.Auth
 	Hub  *Hub
+	CA   *pki.CA
 	Cfg  EnforceConfig
 }
 
-// Enroll: troca o enrollment token (JWT de login) por um device token (M1; mTLS depois).
+// Enroll: valida o enrollment token (JWT de login), assina o CSR do device com a CA
+// e devolve o cert de device (mTLS) + a cadeia da CA. A chave privada fica no executor.
 func (s *Server) Enroll(ctx context.Context, req *apiforv1.EnrollRequest) (*apiforv1.EnrollResponse, error) {
 	claims, err := s.Auth.Parse(req.GetEnrollmentToken())
 	if err != nil {
 		return nil, err
 	}
-	token := db.NewID("dvt")
-	devID, err := s.DB.CreateDevice(ctx, claims.OrgID, claims.Subject, token)
+	devID := db.NewID("dev")
+	certPEM, serial, notAfter, err := s.CA.SignCSR(req.GetCsr(), devID, 30*24*time.Hour)
 	if err != nil {
+		log.Printf("enroll: assinatura do CSR falhou: %v", err)
 		return nil, err
 	}
-	log.Printf("enroll: device=%s org=%s", devID, claims.OrgID)
+	if err := s.DB.CreateDeviceCert(ctx, claims.OrgID, claims.Subject, devID, serial, notAfter); err != nil {
+		return nil, err
+	}
+	log.Printf("enroll: device=%s org=%s serial=%s (cert assinado pela CA)", devID, claims.OrgID, serial)
 	return &apiforv1.EnrollResponse{
 		DeviceId:    devID,
-		Certificate: []byte(token), // M1: token no campo certificate
-		ExpiresAt:   time.Now().Add(30 * 24 * time.Hour).UnixMilli(),
+		Certificate: certPEM,
+		CaChain:     s.CA.CertPEM,
+		ExpiresAt:   notAfter.UnixMilli(),
 	}, nil
 }
 
-// Stream: canal bidi. Autentica por device token na metadata "authorization".
+// Stream: canal bidi. Autentica pelo cert de device (mTLS): o serial do peer
+// tem de bater com um device não-revogado. Revogar o cert = kill-switch real.
 func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 	ctx := stream.Context()
-	token := bearer(ctx)
-	dev, err := s.DB.FindDeviceByToken(ctx, token)
-	if err != nil || dev == nil {
-		log.Printf("stream: device token inválido")
+	serial, ok := peerCertSerial(ctx)
+	if !ok {
+		log.Printf("stream: sem cert de device (mTLS exigido)")
 		return context.Canceled
 	}
-	log.Printf("stream aberto: device=%s org=%s", dev.ID, dev.OrgID)
+	dev, err := s.DB.FindDeviceBySerial(ctx, serial)
+	if err != nil || dev == nil {
+		log.Printf("stream: cert desconhecido ou revogado (serial=%s)", serial)
+		return context.Canceled
+	}
+	log.Printf("stream aberto (mTLS): device=%s org=%s serial=%s", dev.ID, dev.OrgID, serial)
 
 	// Canal de saída (push): tudo que o cérebro envia passa por aqui — uma única
 	// goroutine faz Send, o loop principal faz Recv (regra do gRPC streaming).
@@ -202,18 +216,15 @@ func stepKindToType(k apiforv1.StepKind) string {
 	}
 }
 
-func bearer(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
+// peerCertSerial extrai o serial (hex) do cert de device apresentado na conexão mTLS.
+func peerCertSerial(ctx context.Context) (string, bool) {
+	pr, ok := peer.FromContext(ctx)
 	if !ok {
-		return ""
+		return "", false
 	}
-	vals := md.Get("authorization")
-	if len(vals) == 0 {
-		return ""
+	ti, ok := pr.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(ti.State.PeerCertificates) == 0 {
+		return "", false
 	}
-	t := vals[0]
-	if len(t) > 7 && t[:7] == "Bearer " {
-		return t[7:]
-	}
-	return t
+	return ti.State.PeerCertificates[0].SerialNumber.Text(16), true
 }

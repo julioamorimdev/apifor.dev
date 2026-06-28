@@ -84,8 +84,21 @@ Pro+ sem expiração), **worker-hours 36h/sem** no Free, **kill-switch** (device
 `LEASE_TTL_SEC`, `WORKER_HOURS_CAP_SEC`, `REAPER_TICK_SEC`, `GRACE_SEC`. REST:
 `GET /v1/usage`, `GET /v1/devices`, `POST /v1/devices/{id}/revoke`, `POST /v1/billing/plan`.
 
-> Falta do M3: **Stripe** (Checkout/Portal/webhooks + dunning) e **mTLS real** (PKI) —
-> M3.2, dependem de credenciais externas. Graça de 5min é parcial.
+## mTLS real / PKI (M3.2a)
+
+O cérebro tem uma **CA própria** (persistida em volume). No Enroll o executor manda um
+**CSR** (chave privada nunca sai da máquina) e recebe um **cert de device** assinado pela
+CA; a **stream gRPC roda sobre mTLS** e é autenticada pelo **serial do cert** do peer.
+**Revogar o device = kill-switch real** (o serial sai da query de auth → reconexão negada).
+
+- Bootstrap: `GET /v1/ca` serve o cert público da CA; o executor confia nele.
+- gRPC: TLS com `VerifyClientCertIfGiven` (Enroll sem cert; Stream com cert de device).
+- Cert de device: ECDSA P-256, validade 30d. Renovação automática fica p/ depois.
+
+Substitui o token-no-campo-cert do M1. Sem novos comandos: `make up` já sobe com mTLS.
+
+> Falta do M3 (**M3.2b**): **Stripe** (Checkout/Portal/webhooks + dunning) — depende de
+> chave externa. Graça de 5min e renovação de cert são parciais.
 
 ## Estado
 - **M0** — fundação: serviços compilam e sobem, banco migrado.
@@ -105,6 +118,9 @@ Pro+ sem expiração), **worker-hours 36h/sem** no Free, **kill-switch** (device
   `usage_event` + `worker_hours_counter`) e **kill-switch** (revoga device →
   `LEASE_REVOKED`+`STOP_WORKER`). REST `/v1/usage` `/v1/devices` `/v1/billing/plan` +
   tela **Uso**. 4 cenários validados e2e (knobs encolhem 4h/36h p/ segundos).
+- **M3.2a** — mTLS real (PKI): CA própria → Enroll assina CSR → cert de device →
+  **stream gRPC sobre mTLS** autenticada pelo serial do cert; **revogar cert = kill-switch**.
+  `GET /v1/ca` p/ bootstrap. Validado e2e (handshake, enroll, relay sobre mTLS, revogação).
 
-Próximo: **M3.2** (Stripe + mTLS real) ou **M4** (gates do pipeline:
+Próximo: **M3.2b** (Stripe + dunning) ou **M4** (gates do pipeline:
 plan/exec/test/review/merge, agent_profile, merge rules, intervenção).

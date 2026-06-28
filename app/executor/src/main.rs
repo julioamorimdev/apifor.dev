@@ -13,6 +13,7 @@ pub mod pb {
 mod exec;
 mod ipc;
 mod relay;
+mod tlsid;
 mod vault;
 
 use pb::envelope::Payload;
@@ -27,7 +28,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::metadata::MetadataValue;
+use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 use tonic::Request;
 
 #[derive(serde::Deserialize)]
@@ -136,26 +137,54 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("login ok");
 
-    // 2. gRPC connect (retry) + Enroll (troca JWT por device token)
-    let mut client = loop {
-        match OrchestratorClient::connect(grpc.clone()).await {
+    // 2. bootstrap da CA (busca o cert público por HTTP) + CSR gerado LOCAL
+    let ca_pem: Vec<u8> = loop {
+        match client_http.get(format!("{http}/v1/ca")).send().await {
+            Ok(r) => match r.bytes().await {
+                Ok(b) if !b.is_empty() => break b.to_vec(),
+                _ => eprintln!("ca vazia, retry"),
+            },
+            Err(e) => eprintln!("ca fetch retry: {e}"),
+        }
+        sleep(Duration::from_secs(2)).await;
+    };
+    let ca = Certificate::from_pem(ca_pem);
+    let (csr_pem, key_pem) = tlsid::make_csr();
+    println!("CA obtida + CSR gerado (chave privada fica local)");
+
+    // 3. Enroll sobre TLS (server-TLS, ainda sem cert de cliente): CSR -> cert de device
+    let enroll_tls = ClientTlsConfig::new().ca_certificate(ca.clone()).domain_name("cerebro");
+    let enroll_ch = loop {
+        match Endpoint::from_shared(grpc.clone())?
+            .tls_config(enroll_tls.clone())?
+            .connect()
+            .await
+        {
             Ok(c) => break c,
             Err(e) => {
-                eprintln!("grpc connect retry: {e}");
+                eprintln!("grpc(enroll) retry: {e}");
                 sleep(Duration::from_secs(2)).await;
             }
         }
     };
-    let enr = client
+    let enr = OrchestratorClient::new(enroll_ch)
         .enroll(EnrollRequest {
             enrollment_token: lr.access_token,
-            csr: vec![],
-            device_label: "executor-m2".into(),
+            csr: csr_pem.into_bytes(),
+            device_label: "executor-m3".into(),
         })
         .await?
         .into_inner();
-    let token = String::from_utf8(enr.certificate).unwrap_or_default();
-    println!("enroll ok: device={}", enr.device_id);
+    println!("enroll ok (mTLS): device={}", enr.device_id);
+
+    // 4. canal mTLS p/ a stream — apresenta o cert de device (chave priva local)
+    let id = Identity::from_pem(enr.certificate, key_pem.into_bytes());
+    let stream_tls = ClientTlsConfig::new().ca_certificate(ca).identity(id).domain_name("cerebro");
+    let stream_ch = Endpoint::from_shared(grpc.clone())?
+        .tls_config(stream_tls)?
+        .connect()
+        .await?;
+    let mut client = OrchestratorClient::new(stream_ch);
 
     // 3. pré-enfileira heartbeat + lease, DEPOIS abre a stream
     let (tx, rx) = mpsc::channel::<Envelope>(16);
@@ -181,11 +210,9 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         tx.send(lease_req()).await?;
     }
 
-    let mut req = Request::new(ReceiverStream::new(rx));
-    req.metadata_mut()
-        .insert("authorization", MetadataValue::try_from(format!("Bearer {token}"))?);
+    let req = Request::new(ReceiverStream::new(rx));
     let mut inbound = client.stream(req).await?.into_inner();
-    println!("stream aberto, lease solicitado");
+    println!("stream aberto (mTLS), lease solicitado");
 
     // 4. loop de entrada
     while let Some(env) = inbound.message().await? {
