@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
-import { badge, card, cell, codeAmber, codeDim, input, Page, PageHead, Pills, short, StatCard, tableStyle, thCell, usePoll } from "../ui";
+import { badge, card, cell, codeAmber, codeDim, input, Page, PageHead, Pills, short, StatCard, tableStyle, thCell, usePoll, useT } from "../ui";
 
 type CI = { id: string; provider: string; status: string; task_id: string; finished_at: string };
 
 const FILTERS: [string, string][] = [["all", "Todos"], ["passed", "Verde"], ["failed", "Falhou"]];
 
 export default function CITela() {
+  const t = useT();
   const { data: runs } = usePoll<CI[]>("/v1/ci", 2500);
   const list = runs || [];
   const [f, setF] = useState("all");
@@ -30,11 +31,11 @@ export default function CITela() {
 
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar execução…" style={{ ...input, flex: 1, minWidth: 160 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar execução…")} style={{ ...input, flex: 1, minWidth: 160 }} />
           <Pills options={FILTERS} value={f} onChange={setF} />
         </div>
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Execução</th><th style={thCell}>Provider</th><th style={thCell}>CI</th><th style={{ ...thCell, textAlign: "right" }}>Concluído</th></tr></thead>
+          <thead><tr><th style={thCell}>{t("Execução")}</th><th style={thCell}>{t("Provider")}</th><th style={thCell}>CI</th><th style={{ ...thCell, textAlign: "right" }}>{t("Concluído")}</th></tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.id}>
@@ -47,7 +48,7 @@ export default function CITela() {
                 <td style={{ ...cell, textAlign: "right" }}>{c.finished_at || "—"}</td>
               </tr>
             ))}
-            {!rows.length && <tr><td style={cell} colSpan={4}>nenhuma execução de CI</td></tr>}
+            {!rows.length && <tr><td style={cell} colSpan={4}>{t("nenhuma execução de CI")}</td></tr>}
           </tbody>
         </table>
         <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} execução(ões)</div>

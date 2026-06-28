@@ -1,5 +1,5 @@
 "use client";
-import { Page, PageHead, apiPost, btn, card } from "../ui";
+import { Page, PageHead, apiPost, btn, card, useT } from "../ui";
 
 type Plan = { key: string; name: string; price: string; highlight?: boolean; feats: string[] };
 const PLANS: Plan[] = [
@@ -10,6 +10,7 @@ const PLANS: Plan[] = [
 ];
 
 export default function Pricing() {
+  const t = useT();
   async function assinar(plan: string) {
     if (plan === "free") return;
     if (plan === "enterprise") { window.location.href = "mailto:vendas@apifor.dev?subject=Enterprise"; return; }

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { badge, card, cell, codeAmber, input, Page, PageHead, Pills, StateBar, tableStyle, usePoll } from "../ui";
+import { badge, card, cell, codeAmber, input, Page, PageHead, Pills, StateBar, tableStyle, usePoll, useT } from "../ui";
 
 type Task = { id: string; title: string; status: string };
 
@@ -17,6 +17,7 @@ const match = (f: string, s: string) =>
 const th = { ...cell, color: "var(--mute)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: ".06em", fontWeight: 600 };
 
 export default function Fila() {
+  const t = useT();
   const { data: tasks } = usePoll<Task[]>("/v1/tasks", 1500);
   const all = tasks || [];
   const [f, setF] = useState("all");
@@ -29,11 +30,11 @@ export default function Fila() {
       <StateBar title="Estado das tarefas" counts={counts} />
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar tarefa…" style={{ ...input, flex: 1, minWidth: 160 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar tarefa…")} style={{ ...input, flex: 1, minWidth: 160 }} />
           <Pills options={FILTERS} value={f} onChange={setF} />
         </div>
         <table style={tableStyle}>
-          <thead><tr><th style={th}>Tarefa</th><th style={th}>Título</th><th style={{ ...th, textAlign: "right" }}>Estado</th></tr></thead>
+          <thead><tr><th style={th}>{t("Tarefa")}</th><th style={th}>{t("Título")}</th><th style={{ ...th, textAlign: "right" }}>{t("Estado")}</th></tr></thead>
           <tbody>
             {rows.map((t) => (
               <tr key={t.id}>
@@ -42,7 +43,7 @@ export default function Fila() {
                 <td style={{ ...cell, textAlign: "right" }}><span style={badge(t.status)}>{t.status}</span></td>
               </tr>
             ))}
-            {!rows.length && <tr><td style={cell} colSpan={3}>nenhuma tarefa</td></tr>}
+            {!rows.length && <tr><td style={cell} colSpan={3}>{t("nenhuma tarefa")}</td></tr>}
           </tbody>
         </table>
         <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} tarefa(s)</div>

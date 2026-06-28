@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { card, input, Page, PageHead, Pills, short, usePoll } from "../ui";
+import { card, input, Page, PageHead, Pills, short, usePoll, useT } from "../ui";
 
 type Log = { when: string; task_id: string; type: string; status: string; log: string };
 
@@ -8,6 +8,7 @@ const FILTERS: [string, string][] = [["all", "Todos"], ["done", "OK"], ["failed"
 const dot = (s: string) => (s === "done" || s === "passed" || s === "approved" || s === "merged" ? "var(--green)" : s === "failed" || s === "changes" ? "var(--red)" : s === "running" ? "var(--blue)" : "var(--mute)");
 
 export default function Logs() {
+  const t = useT();
   const { data: logs } = usePoll<Log[]>("/v1/logs", 2500);
   const all = logs || [];
   const [f, setF] = useState("all");
@@ -21,7 +22,7 @@ export default function Logs() {
       <PageHead eyebrow="Operação" title="Logs" subtitle="Feed do pipeline (steps dos workers) em tempo real." />
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar log…" style={{ ...input, flex: 1, minWidth: 160 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar log…")} style={{ ...input, flex: 1, minWidth: 160 }} />
           <Pills options={FILTERS} value={f} onChange={setF} />
         </div>
         <div style={{ fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.7, padding: "10px 4px", maxHeight: "68vh", overflowY: "auto" }}>
