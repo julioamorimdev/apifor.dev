@@ -23,7 +23,7 @@ const STR: Record<string, Record<string, string>> = {
   en: { search: "Search…", op: "Operations", sys: "Knowledge & system", acct: "Account & billing", wsp: "workspace", pool: "Pool ok", newWsp: "New workspace", noRes: "No results", cmdHint: "navigate" },
 };
 const EN_LABEL: Record<string, string> = {
-  "/": "Live", "/queue": "Queue", "/tasks": "Tasks", "/prs": "Pull Requests", "/interventions": "Intervention",
+  "/": "Dashboard", "/live": "Live", "/queue": "Queue", "/tasks": "Tasks", "/prs": "Pull Requests", "/interventions": "Intervention",
   "/ci": "CI", "/qa": "QA", "/routines": "Routines", "/telemetry": "Telemetry", "/knowledge": "Knowledge",
   "/config": "Settings", "/audit": "Audit", "/org": "Organization", "/usage": "Usage", "/invoices": "Invoices", "/pricing": "Plans",
 };
@@ -116,10 +116,41 @@ export function Pills({ options, value, onChange }: { options: [string, string][
   );
 }
 
+// mini-gráfico de linha (série de números)
+export function Sparkline({ data, color = "--accent", w = 116, h = 32 }: { data: number[]; color?: string; w?: number; h?: number }) {
+  const d = data.length < 2 ? [data[0] || 0, data[0] || 0] : data;
+  const max = Math.max(...d, 1), min = Math.min(...d, 0), span = max - min || 1;
+  const pts = d.map((v, i) => `${(i / (d.length - 1)) * w},${(h - 3) - ((v - min) / span) * (h - 6) + 1}`).join(" ");
+  return (
+    <svg width={w} height={h} style={{ display: "block", flexShrink: 0 }}>
+      <polyline points={pts} fill="none" stroke={`var(${color})`} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+// acumula um valor numa janela rolante (série real ao vivo)
+export function useSeries(value: number, n = 24) {
+  const [s, setS] = useState<number[]>([]);
+  useEffect(() => { setS((cur) => [...cur, value].slice(-n)); }, [value, n]);
+  return s;
+}
+// card de métrica: rótulo + número grande + sparkline + sub
+export function StatCard({ label, value, suffix, tone = "accent", series, sub }: { label: string; value: React.ReactNode; suffix?: string; tone?: string; series?: number[]; sub?: string }) {
+  return (
+    <div style={{ ...card, padding: 16, marginBottom: 0 }}>
+      <div style={{ color: "var(--mute)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontFamily: "var(--head)", fontWeight: 800, fontSize: 28, lineHeight: 1 }}>{value}{suffix && <span style={{ fontSize: 14, color: "var(--mute)", fontWeight: 600 }}>{suffix}</span>}</div>
+        {series && series.length > 1 && <Sparkline data={series} color={`--${tone}`} />}
+      </div>
+      {sub && <div style={{ color: "var(--mute)", fontSize: 12, marginTop: 9 }}>{sub}</div>}
+    </div>
+  );
+}
+
 // ───────────────────────── navegação agrupada ─────────────────────────
 type Item = [string, string, string?]; // [href, label_pt, countKey?]
 const NAV: { key: string; items: Item[] }[] = [
-  { key: "op", items: [["/", "Live", "workers"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"], ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"], ["/ci", "CI"], ["/qa", "QA"], ["/routines", "Rotinas"], ["/telemetry", "Telemetria"]] },
+  { key: "op", items: [["/", "Dashboard"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"], ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"], ["/live", "Live", "workers"], ["/ci", "CI"], ["/qa", "QA"], ["/routines", "Rotinas"], ["/telemetry", "Telemetria"]] },
   { key: "sys", items: [["/knowledge", "Conhecimento"], ["/config", "Configuração"], ["/audit", "Auditoria"]] },
   { key: "acct", items: [["/org", "Organização"], ["/usage", "Uso"], ["/invoices", "Faturas"], ["/pricing", "Planos"]] },
 ];
@@ -161,7 +192,8 @@ const countBadge = (n?: number, tone = "accent") =>
 
 // ───────────────────────── ícones (linha, currentColor) ─────────────────────────
 const ICONS: Record<string, string[]> = {
-  "/": ["M22 12h-4l-3 9L9 3l-3 9H2"],
+  "/": ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M14 14h7v7h-7z", "M3 14h7v7H3z"],
+  "/live": ["M22 12h-4l-3 9L9 3l-3 9H2"],
   "/queue": ["M8 6h13M8 12h13M8 18h13", "M3 6h.01M3 12h.01M3 18h.01"],
   "/tasks": ["M9 11l3 3L22 4", "M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"],
   "/prs": ["M18 6v8a3 3 0 0 1-3 3H7", "M6 9V5", "M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M18 6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
