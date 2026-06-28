@@ -47,6 +47,7 @@ export const badge = (s: string) => {
   return { background: `var(${tt})`, color: `var(${c})`, padding: "2px 8px", borderRadius: 6, fontSize: 12, whiteSpace: "nowrap" as const, fontWeight: 500 };
 };
 export const cell = { padding: "9px 14px", borderBottom: "1px solid var(--border)", textAlign: "left" as const, fontSize: 13.5 };
+export const thCell = { ...cell, color: "var(--mute)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: ".06em", fontWeight: 600 };
 export const tableStyle = { width: "100%", borderCollapse: "collapse" as const };
 export const card = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", marginBottom: 18 };
 export const input = { background: "var(--bg)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 11px", fontSize: 14, outline: "none" };
