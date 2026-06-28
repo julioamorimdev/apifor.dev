@@ -154,8 +154,21 @@ REST: `GET /v1/interventions`, `POST /v1/interventions/{task}/answer`; PRs expõ
 - **Timeline/Logs**: cada etapa do pipeline grava status+output no `step` (visível em
   `GET /v1/tasks/{id}/steps` e na tela Tarefas).
 
-> Parciais do M4 (→ **M4.3**): telas dedicadas CI/QA/Telemetria; modelo do planner via
-> proto (hoje o relay usa opus por padrão).
+### M4.3 — telas CI / QA / Telemetria
+
+O step de teste alimenta `ci_run` **e** `qa_report`; as telas leem isso + um agregado.
+
+```bash
+make ci          # execuções de CI (ci_run)
+make qa          # relatórios de QA (qa_report: testes passados/total)
+make telemetry   # agregado: tarefas por estado, PRs, tokens, worker-hours/sem
+```
+
+REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
+**Telemetria** no dashboard (Logs = timeline de steps na tela Tarefas).
+
+> Pendência menor do M4: modelo do **planner** via proto (hoje o relay usa opus por
+> padrão); exige um campo novo no `RequestPlan`.
 
 ## Estado
 - **M0** — fundação: serviços compilam e sobem, banco migrado.
@@ -193,5 +206,8 @@ REST: `GET /v1/interventions`, `POST /v1/interventions/{task}/answer`; PRs expõ
   (`TaskStateSnapshot` no reconnect retoma o step pendente) e timeline de steps (Logs).
   Validado e2e: review usa o modelo do reviewer; merge perdido offline é retomado no reconnect.
 
-**M3 completo; M4.1+M4.2 feitos.** Próximo: **M4.3** (telas CI/QA/Telemetria) ou
-**M5** (multi-tenant/Team) ou hardening (M6).
+- **M4.3** — telas **CI** / **QA** / **Telemetria**: o step de teste alimenta `ci_run`
+  e `qa_report`; REST `GET /v1/ci` `/v1/qa` `/v1/telemetry` + telas no dashboard.
+  Validado e2e (CI passed, QA 1/1, telemetria agregada).
+
+**M3 e M4 completos.** Próximo: **M5** (multi-tenant/Team) ou hardening (M6).

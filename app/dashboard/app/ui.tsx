@@ -64,7 +64,10 @@ const TABS = [
   ["/tasks", "Tarefas"],
   ["/config", "Configuração"],
   ["/prs", "PRs"],
+  ["/ci", "CI"],
+  ["/qa", "QA"],
   ["/interventions", "Intervenção"],
+  ["/telemetry", "Telemetria"],
   ["/usage", "Uso"],
   ["/invoices", "Faturas"],
 ];

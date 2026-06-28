@@ -51,6 +51,9 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/prs", a.prs)               // GET lista pull requests
 	mux.HandleFunc("/v1/interventions", a.interventions)       // GET gates aguardando humano
 	mux.HandleFunc("/v1/interventions/", a.interventionAnswer) // POST /{taskID}/answer
+	mux.HandleFunc("/v1/ci", a.ci)                             // GET ci_runs
+	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
+	mux.HandleFunc("/v1/telemetry", a.telemetry)               // GET agregado
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
 	mux.HandleFunc("/v1/devices", a.devices)       // GET lista devices
 	mux.HandleFunc("/v1/devices/", a.deviceRevoke) // POST /v1/devices/{id}/revoke (kill-switch)
@@ -280,6 +283,34 @@ func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, 400, errBody("bad_request", "decision: approve|reject"))
 	}
+}
+
+// ci/qa/telemetry: telas read-only do M4.3.
+func (a *API) ci(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListCI(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) qa(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListQA(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) telemetry(w http.ResponseWriter, r *http.Request) {
+	row, err := a.DB.Telemetry(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, row)
 }
 
 // dispatchMerge empurra o step de merge ao executor (após aprovação humana).

@@ -307,6 +307,81 @@ func (d *DB) SetCIResult(ctx context.Context, taskID string, passed bool, summar
 	return err
 }
 
+// CreateQAReport grava um relatório de QA a partir do step de teste (M4.3).
+func (d *DB) CreateQAReport(ctx context.Context, taskID string, passed bool, summary string) {
+	prID, orgID, err := d.prIDByTask(ctx, taskID)
+	if err != nil {
+		return
+	}
+	total, np, st := 1, 0, "failed"
+	if passed {
+		np, st = 1, "passed"
+	}
+	_, _ = d.Pool.Exec(ctx, `INSERT INTO qa_report(id,org_id,task_id,pr_id,status,tests_total,tests_passed,summary)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, NewID("qa"), orgID, taskID, prID, st, total, np, summary)
+}
+
+func (d *DB) ListCI(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT c.id,COALESCE(c.provider,''),c.status::text,COALESCE(p.task_id,''),
+		COALESCE(to_char(c.finished_at,'YYYY-MM-DD HH24:MI:SS'),'')
+		FROM ci_run c JOIN pull_request p ON p.id=c.pr_id WHERE p.org_id=$1 ORDER BY c.started_at DESC LIMIT 50`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, prov, st, task, fin string
+		if err := rows.Scan(&id, &prov, &st, &task, &fin); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "provider": prov, "status": st, "task_id": task, "finished_at": fin})
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) ListQA(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(task_id,''),COALESCE(status,''),COALESCE(tests_total,0),
+		COALESCE(tests_passed,0),to_char(created_at,'YYYY-MM-DD HH24:MI')
+		FROM qa_report WHERE org_id=$1 ORDER BY created_at DESC LIMIT 50`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, task, st, date string
+		var total, passed int
+		if err := rows.Scan(&id, &task, &st, &total, &passed, &date); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "task_id": task, "status": st, "tests_total": total, "tests_passed": passed, "date": date})
+	}
+	return out, rows.Err()
+}
+
+// Telemetry — agregado por org (tarefas por estado, tokens, PRs, worker-hours/sem).
+func (d *DB) Telemetry(ctx context.Context, orgID string) (Row, error) {
+	var total, merged, failed, active int
+	var tokens int64
+	err := d.Pool.QueryRow(ctx, `SELECT count(*),
+		count(*) FILTER (WHERE status='merged'),
+		count(*) FILTER (WHERE status='failed'),
+		count(*) FILTER (WHERE status IN ('queued','planning','running','blocked','in_review','assigned')),
+		COALESCE(sum(tokens_used),0)
+		FROM task WHERE org_id=$1`, orgID).Scan(&total, &merged, &failed, &active, &tokens)
+	if err != nil {
+		return nil, err
+	}
+	var prs int
+	_ = d.Pool.QueryRow(ctx, `SELECT count(*) FROM pull_request WHERE org_id=$1`, orgID).Scan(&prs)
+	week, _ := d.WeekSecondsUsed(ctx, orgID)
+	return Row{
+		"tasks_total": total, "tasks_merged": merged, "tasks_failed": failed, "tasks_active": active,
+		"tokens_used": tokens, "pull_requests": prs, "week_worker_seconds": week,
+	}, nil
+}
+
 // SetAIReview grava o resultado do step de revisão IA: pull_request.ai_review_status.
 func (d *DB) SetAIReview(ctx context.Context, taskID string, approved bool) error {
 	prID, _, err := d.prIDByTask(ctx, taskID)

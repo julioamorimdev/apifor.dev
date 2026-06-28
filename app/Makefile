@@ -3,7 +3,7 @@ SHELL := /bin/bash
         secret ipc-status task steps relay-demo git-remote repo prs pr-demo \
         usage plan devices revoke enforce-demo \
         subscription invoices checkout billing-demo \
-        interventions approve reject pipeline-demo
+        interventions approve reject pipeline-demo ci qa telemetry
 
 dev: ; docker compose up --build
 
@@ -97,3 +97,8 @@ reject: ; @curl -s -XPOST http://localhost:8088/v1/interventions/$(TASK)/answer 
 
 # demo do pipeline completo: plan->exec->test->review->gate humano->merge
 pipeline-demo: ; @bash scripts/pipeline-demo.sh
+
+# ── M4.3: telas read-only ──
+ci: ; @curl -s http://localhost:8088/v1/ci; echo                 # execuções de CI
+qa: ; @curl -s http://localhost:8088/v1/qa; echo                 # relatórios de QA
+telemetry: ; @curl -s http://localhost:8088/v1/telemetry; echo   # agregado da org

@@ -244,6 +244,7 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST, "")
 	case "test":
 		_ = s.DB.SetCIResult(ctx, taskID, r.Passed, r.Summary)
+		s.DB.CreateQAReport(ctx, taskID, r.Passed, r.Summary)
 		if r.Passed {
 			s.DB.RecordStepOutput(ctx, taskID, "test", "done", r.Summary)
 			log.Printf("pipeline: CI verde task=%s -> review", taskID)
