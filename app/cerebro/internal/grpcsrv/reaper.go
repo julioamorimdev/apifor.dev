@@ -66,10 +66,22 @@ func (s *Server) tryGrant(ctx context.Context, orgID, wspID string) (*apiforv1.L
 	if err != nil || pl == nil {
 		return nil, "no_plan"
 	}
+	// cap efetivo: em modo "pinned", o teto é a concorrência somada dos workers
+	// dedicados (mas nunca acima do limite do plano).
+	capW := -1 // -1 = sem teto (∞)
 	if pl.MaxWorkers != nil {
+		capW = *pl.MaxWorkers
+	}
+	if s.DB.PoolMode(ctx, orgID) == "pinned" {
+		pc := s.DB.PinnedConcurrency(ctx, orgID)
+		if capW < 0 || pc < capW {
+			capW = pc
+		}
+	}
+	if capW >= 0 {
 		n, _ := s.DB.ActiveLeaseCount(ctx, orgID)
-		if n >= *pl.MaxWorkers {
-			return nil, "plan_limit"
+		if n >= capW {
+			return nil, "cap"
 		}
 	}
 	if cap := s.Cfg.capSec(pl); cap > 0 {

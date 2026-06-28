@@ -65,11 +65,11 @@ func newRateLimiter(d *db.DB) *RateLimiter {
 func rpmForPlan(plan string) int64 {
 	switch plan {
 	case "free":
-		return 60
+		return 240 // o dashboard faz polling de vários endpoints; 60 estourava só ocioso
 	case "pro":
-		return 300
+		return 600
 	case "team":
-		return 1000
+		return 2000
 	default: // enterprise
 		return 0
 	}

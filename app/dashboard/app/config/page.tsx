@@ -1,20 +1,25 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost, badge, btn, card, CardHead, cell, codeAmber, codeDim, input, Modal, Page, PageHead, short, tableStyle, thCell, Toggle, usePoll, useT } from "../ui";
+import { apiDelete, apiGet, apiPost, badge, btn, card, CardHead, cell, codeAmber, codeDim, input, Modal, Page, PageHead, short, tableStyle, thCell, Toggle, usePoll, useT } from "../ui";
 
 type Repo = { id: string; name: string; default_branch: string; clone_url: string };
 type Secret = { id: string; name: string; type: string; fingerprint: string; location: string };
 type Conn = { id: string; type: string; provider: string; label: string; status: string; created: string };
-type Pool = { parallel_workers: number; timeout_min: number; retries: number; paused: boolean; auto_merge: boolean; isolamento: boolean };
+type Pool = { mode: string; parallel_workers: number; timeout_min: number; retries: number; paused: boolean; auto_merge: boolean; isolamento: boolean };
+type PinnedW = { id: string; focus: string; repo_id: string; repo_name: string; concurrency: number; model: string };
+const MODELS = ["claude_opus", "claude_sonnet", "claude_haiku"];
 
 export default function Config() {
   const t = useT();
   const { data: repos, reload } = usePoll<Repo[]>("/v1/repos", 4000);
   const { data: secrets } = usePoll<Secret[]>("/v1/secrets", 4000);
   const { data: conns } = usePoll<Conn[]>("/v1/connections", 5000);
+  const { data: pinned, reload: reloadPinned } = usePoll<PinnedW[]>("/v1/pinned-workers", 4000);
   const [pool, setPool] = useState<Pool | null>(null);
   const [tab, setTab] = useState("workers");
   const [open, setOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pw, setPw] = useState({ focus: "backend", repo_id: "", model: "claude_opus", concurrency: 1 });
   const [r, setR] = useState({ name: "sample", url: "file:///remotes/sample.git", branch: "main" });
 
   const loadPool = useCallback(() => { apiGet<Pool>("/v1/pool").then((x) => { if (!(x as any)?.error) setPool(x); }).catch(() => {}); }, []);
@@ -31,9 +36,16 @@ export default function Config() {
     await apiPost("/v1/repos", { name: r.name, clone_url: r.url, default_branch: r.branch });
     setOpen(false); reload();
   }
+  async function addPinned() {
+    await apiPost("/v1/pinned-workers", pw);
+    setPwOpen(false); reloadPinned();
+  }
+  async function delPinned(id: string) { await apiDelete(`/v1/pinned-workers/${id}`); reloadPinned(); }
 
   const TABS: [string, string][] = [["workers", "Workers"], ["repos", "Repositórios"], ["limits", "Limites"], ["connections", "Conexões"], ["secrets", "Segredos"]];
   const running = pool ? !pool.paused : false;
+  const mode = pool?.mode || "pool";
+  const modelLabel = (m: string) => ({ claude_opus: "Opus", claude_sonnet: "Sonnet", claude_haiku: "Haiku" } as Record<string, string>)[m] || m;
   const Sel = ({ val, opts, onChange }: { val: number; opts: number[]; onChange: (n: number) => void }) => (
     <select style={{ ...input, width: 140 }} value={val} onChange={(e) => onChange(Number(e.target.value))}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
   );
@@ -58,20 +70,19 @@ export default function Config() {
       {tab === "workers" && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
-            <div style={{ ...card, padding: 16, marginBottom: 0, border: "1px solid var(--accent)", boxShadow: "0 0 0 1px var(--accent), var(--shadow)", display: "flex", gap: 12 }}>
-              <span style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>⇄</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><b>Pool</b><span style={{ marginLeft: "auto", width: 14, height: 14, borderRadius: 14, border: "4px solid var(--accent)" }} /></div>
-                <div style={{ color: "var(--dim)", fontSize: 12.5, marginTop: 3 }}>{t("Workers compartilhados com config global — qualquer um pega qualquer tarefa.", "Shared workers with global config — any one picks any task.")}</div>
-              </div>
-            </div>
-            <div style={{ ...card, padding: 16, marginBottom: 0, opacity: .65, display: "flex", gap: 12 }}>
-              <span style={{ width: 34, height: 34, borderRadius: 9, background: "var(--elev)", color: "var(--mute)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>⊙</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><b>Pinned</b><span style={badge("queued")}>{t("em breve", "soon")}</span><span style={{ marginLeft: "auto", width: 14, height: 14, borderRadius: 14, border: "2px solid var(--border)" }} /></div>
-                <div style={{ color: "var(--mute)", fontSize: 12.5, marginTop: 3 }}>{t("Workers dedicados, criados e configurados um a um (máx. 8).", "Dedicated workers, created and configured one by one (max 8).")}</div>
-              </div>
-            </div>
+            {([["pool", "⇄", "Pool", t("Workers compartilhados com config global — qualquer um pega qualquer tarefa.", "Shared workers with global config — any one picks any task.")],
+            ["pinned", "⊙", "Pinned", t("Workers dedicados, criados e configurados um a um (máx. 8).", "Dedicated workers, created and configured one by one (max 8).")]] as const).map(([m, ic, label, desc]) => {
+              const on = mode === m;
+              return (
+                <button key={m} onClick={() => savePool({ mode: m })} style={{ ...card, padding: 16, marginBottom: 0, textAlign: "left", cursor: "pointer", border: on ? "1px solid var(--accent)" : "1px solid var(--border)", boxShadow: on ? "0 0 0 1px var(--accent), var(--shadow)" : "var(--shadow)", display: "flex", gap: 12, alignItems: "flex-start" }}>
+                  <span style={{ width: 34, height: 34, borderRadius: 9, background: on ? "var(--accent-tint)" : "var(--elev)", color: on ? "var(--accent)" : "var(--mute)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{ic}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}><b>{label}</b><span style={{ marginLeft: "auto", width: 14, height: 14, borderRadius: 14, border: on ? "4px solid var(--accent)" : "2px solid var(--border)" }} /></div>
+                    <div style={{ color: "var(--dim)", fontSize: 12.5, marginTop: 3 }}>{desc}</div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
           <div style={{ ...card, padding: 16, display: "flex", alignItems: "center", gap: 14 }}>
@@ -86,12 +97,33 @@ export default function Config() {
             <Toggle on={running} onChange={(v) => savePool({ paused: !v })} />
           </div>
 
-          <div style={card}>
-            <CardHead title="Configuração global do pool" />
-            <Row k={t("Workers em paralelo", "Parallel workers")} sub={t("Quantos workers o pool roda ao mesmo tempo", "How many workers run at once")} v={<Sel val={pool?.parallel_workers ?? 1} opts={[1, 2, 4, 8, 16]} onChange={(n) => savePool({ parallel_workers: n })} />} />
-            <Row k={t("Timeout por tarefa", "Per-task timeout")} sub={t("Encerra e marca retry após o limite (min)", "Ends and retries after the limit (min)")} v={<Sel val={pool?.timeout_min ?? 15} opts={[5, 10, 15, 30, 60]} onChange={(n) => savePool({ timeout_min: n })} />} />
-            <Row k={t("Tentativas antes de bloquear", "Retries before blocking")} sub={t("Quantos retries antes de pedir um humano", "How many retries before asking a human")} v={<Sel val={pool?.retries ?? 2} opts={[0, 1, 2, 3, 5]} onChange={(n) => savePool({ retries: n })} />} />
-          </div>
+          {mode === "pinned" ? (
+            <div style={card}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
+                <b style={{ fontFamily: "var(--head)", fontSize: 13.5 }}>{t("Workers dedicados", "Dedicated workers")} <span style={{ color: "var(--mute)", fontWeight: 400 }}>· {(pinned || []).length}/8</span></b>
+                <button style={{ ...btn, padding: "5px 11px" }} disabled={(pinned || []).length >= 8} onClick={() => setPwOpen(true)}>+ {t("Adicionar worker", "Add worker")}</button>
+              </div>
+              {(pinned || []).map((p) => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ width: 32, height: 32, borderRadius: 9, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>⊙</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{p.focus || t("worker dedicado", "dedicated worker")}</div>
+                    <div style={{ color: "var(--mute)", fontSize: 12.5, fontFamily: "var(--mono)" }}>{p.repo_name || t("qualquer repo", "any repo")} · {t("concorrência", "concurrency")} {p.concurrency}</div>
+                  </div>
+                  <span style={badge("open")}>{modelLabel(p.model)}</span>
+                  <a onClick={() => delPinned(p.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>{t("remover")}</a>
+                </div>
+              ))}
+              {!pinned?.length && <div style={{ padding: 18, color: "var(--mute)" }}>{t("nenhum worker dedicado — adicione o primeiro. O total de concorrências vira o teto do pool.", "no dedicated worker — add the first. The sum of concurrencies becomes the pool cap.")}</div>}
+            </div>
+          ) : (
+            <div style={card}>
+              <CardHead title="Configuração global do pool" />
+              <Row k={t("Workers em paralelo", "Parallel workers")} sub={t("Quantos workers o pool roda ao mesmo tempo", "How many workers run at once")} v={<Sel val={pool?.parallel_workers ?? 1} opts={[1, 2, 4, 8, 16]} onChange={(n) => savePool({ parallel_workers: n })} />} />
+              <Row k={t("Timeout por tarefa", "Per-task timeout")} sub={t("Encerra e marca retry após o limite (min)", "Ends and retries after the limit (min)")} v={<Sel val={pool?.timeout_min ?? 15} opts={[5, 10, 15, 30, 60]} onChange={(n) => savePool({ timeout_min: n })} />} />
+              <Row k={t("Tentativas antes de bloquear", "Retries before blocking")} sub={t("Quantos retries antes de pedir um humano", "How many retries before asking a human")} v={<Sel val={pool?.retries ?? 2} opts={[0, 1, 2, 3, 5]} onChange={(n) => savePool({ retries: n })} />} />
+            </div>
+          )}
 
           <div style={card}>
             <CardHead title="Comportamento" />
@@ -174,6 +206,27 @@ export default function Config() {
           </div>
         </Modal>
       )}
+
+      {pwOpen && (
+        <Modal title="Adicionar worker dedicado" onClose={() => setPwOpen(false)}
+          footer={<><button style={{ ...btn, background: "var(--elev)", color: "var(--dim)" }} onClick={() => setPwOpen(false)}>{t("Cancelar", "Cancel")}</button><button style={btn} onClick={addPinned}>{t("Criar worker", "Create worker")}</button></>}>
+          <div style={{ display: "grid", gap: 10 }}>
+            <input style={input} value={pw.focus} onChange={(e) => setPw({ ...pw, focus: e.target.value })} placeholder={t("foco (ex.: backend, frontend)", "focus (e.g. backend, frontend)")} />
+            <select style={input} value={pw.repo_id} onChange={(e) => setPw({ ...pw, repo_id: e.target.value })}>
+              <option value="">{t("(qualquer repo)", "(any repo)")}</option>
+              {(repos || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            <select style={input} value={pw.model} onChange={(e) => setPw({ ...pw, model: e.target.value })}>
+              {MODELS.map((m) => <option key={m} value={m}>{modelLabel(m)} ({m})</option>)}
+            </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--dim)" }}>
+              {t("concorrência", "concurrency")}
+              <select style={{ ...input, width: 90 }} value={pw.concurrency} onChange={(e) => setPw({ ...pw, concurrency: Number(e.target.value) })}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}</select>
+            </label>
+            <span style={{ color: "var(--mute)", fontSize: 12 }}>{t("O modelo escolhido roda nas tarefas desse repo; a soma das concorrências é o teto do pool.", "The chosen model runs on this repo's tasks; the sum of concurrencies is the pool cap.")}</span>
+          </div>
+        </Modal>
+      )}
     </Page>
   );
 }
@@ -195,7 +248,7 @@ function LimitsTab() {
       <Row k={t("Workers simultâneos", "Concurrent workers")} sub={t("máximo do plano", "plan maximum")} v={`${u?.active_workers ?? 0} / ${u?.max_workers ?? "∞"}`} />
       <Row k={t("Worker-hours (semana)", "Worker-hours (week)")} v={`${fmt(u?.week_seconds_used ?? 0)} / ${fmt(u?.week_cap_seconds ?? 0)}`} />
       <Row k={t("Lease TTL", "Lease TTL")} v={fmt(u?.lease_ttl_seconds ?? 0)} />
-      <Row k={t("Rate limit", "Rate limit")} v={`${u?.plan === "free" ? 60 : u?.plan === "pro" ? 300 : u?.plan === "team" ? 1000 : "∞"}/min`} />
+      <Row k={t("Rate limit", "Rate limit")} v={`${u?.plan === "free" ? 240 : u?.plan === "pro" ? 600 : u?.plan === "team" ? 2000 : "∞"}/min`} />
     </div>
   );
 }

@@ -174,7 +174,7 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 					Branch:      "apifor/" + pr.GetTaskId(),
 					ChangeReq:   tr.Prompt,
 					TargetFiles: pr.GetTargetFiles(),
-					Model:       s.DB.GetAgentModel(ctx, "coder"),
+					Model:       s.coderModel(ctx, tr),
 				}
 				blob, _ := json.Marshal(instr)
 				out <- &apiforv1.Envelope{
@@ -290,6 +290,17 @@ func (s *Server) mergeGate(ctx context.Context, taskID string) bool {
 		return false
 	}
 	return !s.DB.PoolAutoMerge(ctx, s.taskOrg(ctx, taskID))
+}
+
+// coderModel escolhe o modelo do passo de código: em modo "pinned", usa o modelo
+// do worker dedicado ao repo da tarefa; senão, o coder global do agent_profile.
+func (s *Server) coderModel(ctx context.Context, tr *db.TaskRepo) string {
+	if tr != nil && s.DB.PoolMode(ctx, tr.OrgID) == "pinned" {
+		if m := s.DB.PinnedModelForRepo(ctx, tr.OrgID, tr.RepoID); m != "" {
+			return m
+		}
+	}
+	return s.DB.GetAgentModel(ctx, "coder")
 }
 
 // taskOrg resolve a org de uma tarefa (p/ notificações).
