@@ -259,8 +259,11 @@ func (d *DB) CreateMemory(ctx context.Context, orgID, wspID, scope, repoID, inst
 	} else {
 		scope = "global"
 	}
-	_, err := d.Pool.Exec(ctx, `INSERT INTO memory(id,org_id,workspace_id,scope,repo_id,instruction,source)
-		VALUES($1,$2,$3,$4,$5,$6,$7)`, id, orgID, wspID, scope, rid, instruction, source)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO memory(id,org_id,workspace_id,scope,repo_id,instruction,source)
+			VALUES($1,$2,$3,$4,$5,$6,$7)`, id, orgID, wspID, scope, rid, instruction, source)
+		return e
+	})
 	return id, err
 }
 
@@ -315,8 +318,11 @@ func (d *DB) CreateKBDoc(ctx context.Context, orgID, wspID, name, category, file
 	default:
 		category = "doc"
 	}
-	_, err := d.Pool.Exec(ctx, `INSERT INTO kb_document(id,org_id,workspace_id,name,category,file_ref,indexed)
-		VALUES($1,$2,$3,$4,$5,$6,true)`, id, orgID, wspID, name, category, fileRef)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO kb_document(id,org_id,workspace_id,name,category,file_ref,indexed)
+			VALUES($1,$2,$3,$4,$5,$6,true)`, id, orgID, wspID, name, category, fileRef)
+		return e
+	})
 	return id, err
 }
 
@@ -344,8 +350,11 @@ func (d *DB) CreateRoutine(ctx context.Context, orgID, wspID, name, triggerType 
 		t := time.Now().Add(time.Duration(intervalSec) * time.Second)
 		next = &t
 	}
-	_, err := d.Pool.Exec(ctx, `INSERT INTO routine(id,org_id,workspace_id,name,trigger_type,trigger_config,action,enabled,next_run_at)
-		VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,true,$8)`, id, orgID, wspID, name, triggerType, trigJSON, string(actJSON), next)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO routine(id,org_id,workspace_id,name,trigger_type,trigger_config,action,enabled,next_run_at)
+			VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,true,$8)`, id, orgID, wspID, name, triggerType, trigJSON, string(actJSON), next)
+		return e
+	})
 	return id, err
 }
 
@@ -432,20 +441,23 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func (d *DB) RegisterOrg(ctx context.Context, email, name, hash, orgName string) (userID, orgID string, err error) {
 	userID, orgID = NewID("usr"), NewID("org")
 	wsp := NewID("wsp")
-	b := d.Pool
-	if _, err = b.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,$3,$4)`, userID, email, name, hash); err != nil {
-		return
-	}
-	if _, err = b.Exec(ctx, `INSERT INTO org(id,name,owner_user_id,plan) VALUES($1,$2,$3,'free')`, orgID, orgName, userID); err != nil {
-		return
-	}
-	if _, err = b.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier,status) VALUES($1,$2,$3,'owner','active')`, NewID("mbr"), orgID, userID); err != nil {
-		return
-	}
-	if _, err = b.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,'Principal','P')`, wsp, orgID); err != nil {
-		return
-	}
-	_, err = b.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,1,2)`, NewID("pcfg"), wsp)
+	// withOrg(orgID): a própria org sendo criada vira o current_org -> WITH CHECK passa.
+	err = d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,$3,$4)`, userID, email, name, hash); e != nil {
+			return e
+		}
+		if _, e := tx.Exec(ctx, `INSERT INTO org(id,name,owner_user_id,plan) VALUES($1,$2,$3,'free')`, orgID, orgName, userID); e != nil {
+			return e
+		}
+		if _, e := tx.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier,status) VALUES($1,$2,$3,'owner','active')`, NewID("mbr"), orgID, userID); e != nil {
+			return e
+		}
+		if _, e := tx.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,'Principal','P')`, wsp, orgID); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,1,2)`, NewID("pcfg"), wsp)
+		return e
+	})
 	return
 }
 
@@ -458,18 +470,21 @@ func (d *DB) EmailExists(ctx context.Context, email string) (bool, error) {
 // AddMember cria o usuário (se novo) e o vincula à org com o papel dado.
 func (d *DB) AddMember(ctx context.Context, orgID, email, name, hash, role string) (string, error) {
 	var userID string
-	err := d.Pool.QueryRow(ctx, `SELECT id FROM app_user WHERE email=$1`, email).Scan(&userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		userID = NewID("usr")
-		if _, err = d.Pool.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,$3,$4)`, userID, email, name, hash); err != nil {
-			return "", err
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		e := tx.QueryRow(ctx, `SELECT id FROM app_user WHERE email=$1`, email).Scan(&userID)
+		if errors.Is(e, pgx.ErrNoRows) {
+			userID = NewID("usr")
+			if _, e = tx.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,$3,$4)`, userID, email, name, hash); e != nil {
+				return e
+			}
+		} else if e != nil {
+			return e
 		}
-	} else if err != nil {
-		return "", err
-	}
-	_, err = d.Pool.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier,status)
-		VALUES($1,$2,$3,$4,'active') ON CONFLICT (org_id,user_id) DO UPDATE SET permission_tier=EXCLUDED.permission_tier,status='active'`,
-		NewID("mbr"), orgID, userID, role)
+		_, e = tx.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier,status)
+			VALUES($1,$2,$3,$4,'active') ON CONFLICT (org_id,user_id) DO UPDATE SET permission_tier=EXCLUDED.permission_tier,status='active'`,
+			NewID("mbr"), orgID, userID, role)
+		return e
+	})
 	return userID, err
 }
 
@@ -490,10 +505,13 @@ func (d *DB) CreateWorkspace(ctx context.Context, orgID, name string) (string, e
 	if name != "" {
 		init = strings.ToUpper(name[:1])
 	}
-	if _, err := d.Pool.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,$3,$4)`, id, orgID, name, init); err != nil {
-		return "", err
-	}
-	_, err := d.Pool.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,1,2)`, NewID("pcfg"), id)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,$3,$4)`, id, orgID, name, init); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,1,2)`, NewID("pcfg"), id)
+		return e
+	})
 	return id, err
 }
 
@@ -588,14 +606,19 @@ func (d *DB) CompleteTask(ctx context.Context, taskID string) error {
 
 // CreateRealTask cria uma tarefa em 'queued' (sem worker ainda; o relay planeja antes).
 // repoID vazio = tarefa sem repositório (só planeja).
+// Writes do REST: via pool apifor_app com contexto de org -> RLS WITH CHECK
+// bloqueia gravação cross-tenant (M6.4). Workers/pipeline seguem no superuser.
 func (d *DB) CreateRealTask(ctx context.Context, orgID, wspID, title, desc, repoID string) (string, error) {
 	id := NewID("tsk")
 	var rid *string
 	if repoID != "" {
 		rid = &repoID
 	}
-	_, err := d.Pool.Exec(ctx, `INSERT INTO task(id,org_id,workspace_id,repo_id,title,description,status)
-		VALUES($1,$2,$3,$4,$5,$6,'queued')`, id, orgID, wspID, rid, title, desc)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO task(id,org_id,workspace_id,repo_id,title,description,status)
+			VALUES($1,$2,$3,$4,$5,$6,'queued')`, id, orgID, wspID, rid, title, desc)
+		return e
+	})
 	return id, err
 }
 
@@ -603,15 +626,17 @@ func (d *DB) CreateRealTask(ctx context.Context, orgID, wspID, title, desc, repo
 
 // CreateRepo registra uma conexão de código + um repositório (clone_url em settings).
 func (d *DB) CreateRepo(ctx context.Context, orgID, wspID, name, cloneURL, defaultBranch string) (string, error) {
-	conID := NewID("con")
-	if _, err := d.Pool.Exec(ctx, `INSERT INTO connection(id,org_id,workspace_id,type,provider,label,status)
-		VALUES($1,$2,$3,'code','github',$4,'ok')`, conID, orgID, wspID, name); err != nil {
-		return "", err
-	}
-	repoID := NewID("repo")
+	conID, repoID := NewID("con"), NewID("repo")
 	settings := `{"clone_url":` + jsonStr(cloneURL) + `}`
-	_, err := d.Pool.Exec(ctx, `INSERT INTO repository(id,org_id,workspace_id,name,provider,default_branch,connection_id,settings)
-		VALUES($1,$2,$3,$4,'github',$5,$6,$7::jsonb)`, repoID, orgID, wspID, name, defaultBranch, conID, settings)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `INSERT INTO connection(id,org_id,workspace_id,type,provider,label,status)
+			VALUES($1,$2,$3,'code','github',$4,'ok')`, conID, orgID, wspID, name); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO repository(id,org_id,workspace_id,name,provider,default_branch,connection_id,settings)
+			VALUES($1,$2,$3,$4,'github',$5,$6,$7::jsonb)`, repoID, orgID, wspID, name, defaultBranch, conID, settings)
+		return e
+	})
 	return repoID, err
 }
 
@@ -1206,8 +1231,11 @@ func (d *DB) ListSteps(ctx context.Context, taskID string) ([]Row, error) {
 // CreateSecretRef registra só o metadado do segredo (valor fica no vault local).
 func (d *DB) CreateSecretRef(ctx context.Context, orgID, name, typ, fingerprint string) (string, error) {
 	id := NewID("sec")
-	_, err := d.Pool.Exec(ctx, `INSERT INTO secret_ref(id,org_id,name,type,fingerprint,location,exists)
-		VALUES($1,$2,$3,$4,$5,'local',true)`, id, orgID, name, typ, fingerprint)
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO secret_ref(id,org_id,name,type,fingerprint,location,exists)
+			VALUES($1,$2,$3,$4,$5,'local',true)`, id, orgID, name, typ, fingerprint)
+		return e
+	})
 	return id, err
 }
 

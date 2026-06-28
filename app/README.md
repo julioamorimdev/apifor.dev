@@ -248,8 +248,13 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   cross-org seguem no pool superuser. Validado no DB (`apifor_app` sem org → 0 linhas;
   com org → só a sua) e na API (Org A não vê dados da Org B).
 
-**M3, M4 e M5 completos; M6 em curso.** Próximo: **M6.4** (RLS nas escritas, cloud
-workers, SSO/SAML) ou **M7** (empacotamento/launch).
+- **M6.4** — **enforcement de RLS (creates do REST)**: os creates do REST gravam via
+  `apifor_app` com contexto de org; o `WITH CHECK` das policies **bloqueia gravação
+  cross-tenant**. Provado: contexto=A, `INSERT org_id=B` → *RLS policy violation*; creates
+  normais funcionam. Updates/deletes + workers seguem no superuser (documentado).
+
+**M3, M4 e M5 completos; M6 quase completo (RLS reads+creates).** Próximo: cloud workers
+gerenciados / SSO-SAML (infra externa) ou **M7** (empacotamento/launch).
 
 ## Hardening (M6.1)
 

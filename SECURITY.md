@@ -43,7 +43,8 @@ A fronteira de privacidade é a invariante central:
 | Item | Estado | Plano |
 |---|---|---|
 | **Enforcement de RLS (reads)** | ✅ **Feito (M6.3)** — os reads do REST passam pela role **`apifor_app`** (não-superuser) com `app.current_org` setado por transação (`SET LOCAL`); as policies do `002_rls.sql` isolam de fato (query sem `WHERE org_id`). Provado: `apifor_app` sem org → 0 linhas. | — |
-| **Enforcement de RLS (writes + workers)** | Writes e workers cross-org (reaper/scheduler/`GlobalCounts`) seguem na role **superuser** (bypassa RLS); o isolamento das escritas é por `org_id` do JWT no app. | Mover writes p/ `apifor_app` com contexto de org; manter um caminho `BYPASSRLS` só p/ os workers cross-org. |
+| **Enforcement de RLS (creates do REST)** | ✅ **Feito (M6.4)** — os creates do REST (task/repo/secret/memory/kb/routine/workspace/membro/`RegisterOrg`) gravam via `apifor_app` com contexto de org; o `WITH CHECK` das policies **bloqueia gravação cross-tenant**. Provado: contexto=A, `INSERT org_id=B` → *row-level security policy violation*. | — |
+| **Enforcement de RLS (updates/deletes + workers)** | Updates/deletes (`SetPlan`/`RevokeDevice`/`MarkMerged`/…) e o pipeline/reaper/scheduler seguem na role **superuser** (org derivada do device autenticado, não de input do user). | Converter os updates/deletes do REST p/ `apifor_app`; manter `BYPASSRLS` só nos workers cross-org. |
 | **Credenciais demo** | `demo@apifor.dev/demo` seedado; `JWT_SECRET` padrão fraco (aviso no boot). | Remover o seed demo e exigir `JWT_SECRET` forte em produção. |
 | **`REQUIRE_AUTH`** | default **off** (demos funcionam sem token). | Ligar (`REQUIRE_AUTH=true`) em produção. |
 | **IPC** | Unix socket sem token de processo. | Adicionar token de processo + perms do dir 0700 (protocolo §17). |
