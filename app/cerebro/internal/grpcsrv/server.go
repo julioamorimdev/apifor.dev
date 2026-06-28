@@ -22,11 +22,12 @@ import (
 
 type Server struct {
 	apiforv1.UnimplementedOrchestratorServer
-	DB   *db.DB
-	Auth *auth.Auth
-	Hub  *Hub
-	CA   *pki.CA
-	Cfg  EnforceConfig
+	DB                *db.DB
+	Auth              *auth.Auth
+	Hub               *Hub
+	CA                *pki.CA
+	Cfg               EnforceConfig
+	MergeRequireHuman bool // gate de merge: exigir revisão humana (M4.1)
 }
 
 // Enroll: valida o enrollment token (JWT de login), assina o CSR do device com a CA
@@ -116,15 +117,11 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 			if ev == nil {
 				continue
 			}
-			// Exec real (M2.2) reporta um JSON {branch,url}; o step fake do M1 reporta "ok".
+			// Steps do pipeline (M4) reportam JSON {kind,...}; o step fake do M1 reporta "ok".
 			if out := strings.TrimSpace(ev.GetOutput()); strings.HasPrefix(out, "{") {
-				var r struct{ Branch, Url string }
-				if json.Unmarshal([]byte(out), &r) == nil && r.Branch != "" {
-					if err := s.DB.SaveExecResult(ctx, ev.GetTaskId(), r.Branch, r.Url); err != nil {
-						log.Printf("save exec err: %v", err)
-					} else {
-						log.Printf("PR registrado: task=%s branch=%s url=%s", ev.GetTaskId(), r.Branch, r.Url)
-					}
+				var r stepResult
+				if json.Unmarshal([]byte(out), &r) == nil && r.Kind != "" {
+					s.advancePipeline(ctx, ev.GetTaskId(), r)
 					continue
 				}
 			}
@@ -187,13 +184,82 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 	}
 }
 
-// execInstructions é o payload (JSON) do DispatchStep(exec) — espelhado no executor.
+// execInstructions é o payload (JSON) do DispatchStep — espelhado no executor.
 type execInstructions struct {
 	RepoURL     string   `json:"repo_url"`
 	BaseBranch  string   `json:"base_branch"`
 	Branch      string   `json:"branch"`
 	ChangeReq   string   `json:"change_request"`
-	TargetFiles []string `json:"target_files"`
+	TargetFiles []string `json:"target_files,omitempty"`
+}
+
+// stepResult é o output JSON de um step do pipeline (exec/test/review/merge).
+type stepResult struct {
+	Kind     string `json:"kind"`
+	Branch   string `json:"branch"`
+	Url      string `json:"url"`
+	Summary  string `json:"summary"`
+	Comments string `json:"comments"`
+	Passed   bool   `json:"passed"`
+	Approved bool   `json:"approved"`
+	Merged   bool   `json:"merged"`
+}
+
+// dispatchStep empurra o próximo step (test/review/merge) ao executor da org.
+func (s *Server) dispatchStep(ctx context.Context, taskID string, kind apiforv1.StepKind) {
+	tr, err := s.DB.GetTaskRepo(ctx, taskID)
+	if err != nil || tr == nil || tr.CloneURL == "" {
+		log.Printf("dispatchStep: sem repo p/ task=%s", taskID)
+		return
+	}
+	instr := execInstructions{RepoURL: tr.CloneURL, BaseBranch: tr.DefaultBranch, Branch: "apifor/" + taskID, ChangeReq: tr.Prompt}
+	blob, _ := json.Marshal(instr)
+	s.Hub.Send(tr.OrgID, &apiforv1.Envelope{
+		Type: apiforv1.MsgType_DISPATCH_STEP,
+		Payload: &apiforv1.Envelope_DispatchStep{DispatchStep: &apiforv1.DispatchStep{
+			StepId: db.NewID("stp"), TaskId: taskID, Kind: kind, Instructions: string(blob),
+		}},
+	})
+	log.Printf("step despachado: task=%s kind=%v", taskID, kind)
+}
+
+// advancePipeline avança plan→exec→test→review→merge aplicando os gates server-side.
+func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResult) {
+	switch r.Kind {
+	case "exec":
+		_ = s.DB.SaveExecResult(ctx, taskID, r.Branch, r.Url) // PR aberto
+		log.Printf("pipeline: PR criado task=%s branch=%s -> test", taskID, r.Branch)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST)
+	case "test":
+		_ = s.DB.SetCIResult(ctx, taskID, r.Passed, r.Summary)
+		if r.Passed {
+			log.Printf("pipeline: CI verde task=%s -> review", taskID)
+			s.dispatchStep(ctx, taskID, apiforv1.StepKind_REVIEW)
+		} else {
+			_ = s.DB.FailTask(ctx, taskID, "gate: testes falharam")
+			log.Printf("pipeline: CI vermelho task=%s -> failed", taskID)
+		}
+	case "review":
+		_ = s.DB.SetAIReview(ctx, taskID, r.Approved)
+		if !r.Approved {
+			_ = s.DB.FailTask(ctx, taskID, "gate: revisão IA pediu mudanças")
+			log.Printf("pipeline: review IA reprovou task=%s -> failed", taskID)
+			return
+		}
+		// gate de revisão humana
+		if s.MergeRequireHuman {
+			if ok, _ := s.DB.HumanApproved(ctx, taskID); !ok {
+				_ = s.DB.SetTaskBlocked(ctx, taskID, "human_review")
+				log.Printf("pipeline: task=%s bloqueada aguardando revisão HUMANA (intervenção)", taskID)
+				return
+			}
+		}
+		log.Printf("pipeline: gates ok task=%s -> merge", taskID)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_MERGE)
+	case "merge":
+		_ = s.DB.MarkMerged(ctx, taskID, r.Url)
+		log.Printf("pipeline: MERGED task=%s url=%s", taskID, r.Url)
+	}
 }
 
 // stepKindToType mapeia o enum do proto p/ o enum step_type do schema.

@@ -3,6 +3,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -48,6 +49,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/secrets", a.secrets)       // GET lista, POST registra metadado
 	mux.HandleFunc("/v1/repos", a.repos)           // GET lista, POST registra repositório
 	mux.HandleFunc("/v1/prs", a.prs)               // GET lista pull requests
+	mux.HandleFunc("/v1/interventions", a.interventions)       // GET gates aguardando humano
+	mux.HandleFunc("/v1/interventions/", a.interventionAnswer) // POST /{taskID}/answer
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
 	mux.HandleFunc("/v1/devices", a.devices)       // GET lista devices
 	mux.HandleFunc("/v1/devices/", a.deviceRevoke) // POST /v1/devices/{id}/revoke (kill-switch)
@@ -237,6 +240,66 @@ func (a *API) prs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// interventions: GET tarefas bloqueadas no gate de revisão humana.
+func (a *API) interventions(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListInterventions(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// interventionAnswer: POST /v1/interventions/{taskID}/answer {decision: approve|reject}.
+// approve -> aprova o gate humano e despacha o merge; reject -> falha a tarefa.
+func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/interventions/")
+	taskID := strings.TrimSuffix(path, "/answer")
+	if r.Method != http.MethodPost || taskID == "" || taskID == path {
+		writeJSON(w, 404, errBody("not_found", "use POST /v1/interventions/{taskID}/answer"))
+		return
+	}
+	var in struct{ Decision, Note string }
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	switch in.Decision {
+	case "approve":
+		if err := a.DB.ApproveHumanReview(r.Context(), taskID); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.dispatchMerge(r.Context(), taskID)
+		writeJSON(w, 200, map[string]any{"task_id": taskID, "decision": "approve", "merging": true})
+	case "reject":
+		if err := a.DB.RejectHumanReview(r.Context(), taskID, in.Note); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"task_id": taskID, "decision": "reject"})
+	default:
+		writeJSON(w, 400, errBody("bad_request", "decision: approve|reject"))
+	}
+}
+
+// dispatchMerge empurra o step de merge ao executor (após aprovação humana).
+func (a *API) dispatchMerge(ctx context.Context, taskID string) {
+	tr, err := a.DB.GetTaskRepo(ctx, taskID)
+	if err != nil || tr == nil || tr.CloneURL == "" {
+		log.Printf("dispatchMerge: sem repo p/ task=%s", taskID)
+		return
+	}
+	instr, _ := json.Marshal(map[string]any{
+		"repo_url": tr.CloneURL, "base_branch": tr.DefaultBranch,
+		"branch": "apifor/" + taskID, "change_request": tr.Prompt,
+	})
+	a.Hub.Send(tr.OrgID, &apiforv1.Envelope{
+		Type: apiforv1.MsgType_DISPATCH_STEP,
+		Payload: &apiforv1.Envelope_DispatchStep{DispatchStep: &apiforv1.DispatchStep{
+			StepId: db.NewID("stp"), TaskId: taskID, Kind: apiforv1.StepKind_MERGE, Instructions: string(instr),
+		}},
+	})
+	log.Printf("merge despachado após aprovação humana: task=%s", taskID)
 }
 
 // usage: uso atual vs limites do plano (server-side; o cliente não pode burlar).

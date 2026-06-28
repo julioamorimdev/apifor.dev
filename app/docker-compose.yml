@@ -57,6 +57,8 @@ services:
       STRIPE_PRICE_TEAM: "${STRIPE_PRICE_TEAM:-}"
       DUNNING_GRACE_SEC: "${DUNNING_GRACE_SEC:-}"
       PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3000}"
+      # M4.1: gate de merge — exigir revisão humana (false = auto-merge)
+      MERGE_REQUIRE_HUMAN: "${MERGE_REQUIRE_HUMAN:-}"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:
@@ -72,6 +74,9 @@ services:
       APIFOR_WORKDIR: "/workspace"
       # M3.1: pede N leases extras no boot p/ demonstrar a trava max_workers (0 = nenhum)
       APIFOR_EXTRA_LEASES: "${APIFOR_EXTRA_LEASES:-0}"
+      # M4.1: step de teste — APIFOR_TEST_CMD roda comando real; APIFOR_TEST_FAIL=1 força falha
+      APIFOR_TEST_CMD: "${APIFOR_TEST_CMD:-}"
+      APIFOR_TEST_FAIL: "${APIFOR_TEST_FAIL:-}"
       # chave Anthropic opcional: se ausente, o relay usa o stub determinístico.
       # injete a real via IPC (make secret KEY=sk-...), nunca via env do cérebro.
     volumes:

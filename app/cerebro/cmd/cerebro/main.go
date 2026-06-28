@@ -57,7 +57,10 @@ func main() {
 	}
 	log.Printf("PKI pronta: CA carregada, gRPC com mTLS")
 
-	srv := &grpcsrv.Server{DB: database, Auth: a, Hub: hub, CA: ca, Cfg: grpcsrv.EnforceConfigFromEnv()}
+	srv := &grpcsrv.Server{
+		DB: database, Auth: a, Hub: hub, CA: ca, Cfg: grpcsrv.EnforceConfigFromEnv(),
+		MergeRequireHuman: os.Getenv("MERGE_REQUIRE_HUMAN") != "false", // default: exige revisão humana
+	}
 
 	// reaper de enforcement (lease TTL, worker-hours, kill-switch) — server-side
 	go srv.RunReaper(ctx)

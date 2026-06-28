@@ -248,8 +248,116 @@ func (d *DB) FailTask(ctx context.Context, taskID, reason string) error {
 	return err
 }
 
+// ── M4.1: pipeline (test/review/merge) + gates + intervenção ──
+
+func (d *DB) prIDByTask(ctx context.Context, taskID string) (string, string, error) {
+	var prID, orgID string
+	err := d.Pool.QueryRow(ctx, `SELECT id,org_id FROM pull_request WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1`, taskID).
+		Scan(&prID, &orgID)
+	return prID, orgID, err
+}
+
+// SetCIResult grava o resultado do step de teste: pull_request.ci_status + ci_run.
+func (d *DB) SetCIResult(ctx context.Context, taskID string, passed bool, summary string) error {
+	prID, _, err := d.prIDByTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	st := "failed"
+	if passed {
+		st = "passed"
+	}
+	if _, err := d.Pool.Exec(ctx, `UPDATE pull_request SET ci_status=$2,updated_at=now() WHERE id=$1`, prID, st); err != nil {
+		return err
+	}
+	_, err = d.Pool.Exec(ctx, `INSERT INTO ci_run(id,pr_id,provider,status,started_at,finished_at,summary)
+		VALUES($1,$2,'apifor',$3,now(),now(),$4::jsonb)`, NewID("ci"), prID, st, `{"summary":`+jsonStr(summary)+`}`)
+	return err
+}
+
+// SetAIReview grava o resultado do step de revisão IA: pull_request.ai_review_status.
+func (d *DB) SetAIReview(ctx context.Context, taskID string, approved bool) error {
+	prID, _, err := d.prIDByTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	st := "changes"
+	if approved {
+		st = "approved"
+	}
+	_, err = d.Pool.Exec(ctx, `UPDATE pull_request SET ai_review_status=$2,updated_at=now() WHERE id=$1`, prID, st)
+	return err
+}
+
+// HumanApproved diz se a revisão humana já aprovou o PR da tarefa.
+func (d *DB) HumanApproved(ctx context.Context, taskID string) (bool, error) {
+	var st string
+	err := d.Pool.QueryRow(ctx, `SELECT human_review_status FROM pull_request WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1`, taskID).Scan(&st)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return st == "approved", err
+}
+
+func (d *DB) SetTaskBlocked(ctx context.Context, taskID, reason string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE task SET status='blocked',blocked_reason=$2,updated_at=now() WHERE id=$1`, taskID, reason)
+	return err
+}
+
+// MarkMerged: PR e tarefa concluídos (merge feito pelo executor).
+func (d *DB) MarkMerged(ctx context.Context, taskID, url string) error {
+	prID, _, err := d.prIDByTask(ctx, taskID)
+	if err == nil {
+		_, _ = d.Pool.Exec(ctx, `UPDATE pull_request SET status='merged',merged_at=now(),url=$2,updated_at=now() WHERE id=$1`, prID, url)
+	}
+	_, err = d.Pool.Exec(ctx, `UPDATE task SET status='merged',updated_at=now() WHERE id=$1`, taskID)
+	return err
+}
+
+// ApproveHumanReview: humano aprova o gate; desbloqueia a tarefa (p/ seguir ao merge).
+func (d *DB) ApproveHumanReview(ctx context.Context, taskID string) error {
+	prID, _, err := d.prIDByTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if _, err := d.Pool.Exec(ctx, `UPDATE pull_request SET human_review_status='approved',updated_at=now() WHERE id=$1`, prID); err != nil {
+		return err
+	}
+	_, err = d.Pool.Exec(ctx, `UPDATE task SET status='running',blocked_reason=NULL,updated_at=now() WHERE id=$1`, taskID)
+	return err
+}
+
+// RejectHumanReview: humano reprova → tarefa falha.
+func (d *DB) RejectHumanReview(ctx context.Context, taskID, note string) error {
+	if prID, _, err := d.prIDByTask(ctx, taskID); err == nil {
+		_, _ = d.Pool.Exec(ctx, `UPDATE pull_request SET human_review_status='changes',updated_at=now() WHERE id=$1`, prID)
+	}
+	return d.FailTask(ctx, taskID, "revisão humana reprovou: "+note)
+}
+
+// ListInterventions: tarefas bloqueadas aguardando revisão humana (gate de merge).
+func (d *DB) ListInterventions(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT t.id,t.title,COALESCE(p.branch,''),COALESCE(p.ci_status::text,''),COALESCE(p.ai_review_status::text,'')
+		FROM task t LEFT JOIN pull_request p ON p.task_id=t.id
+		WHERE t.org_id=$1 AND t.status='blocked' AND t.blocked_reason='human_review' ORDER BY t.created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, title, branch, ci, ai string
+		if err := rows.Scan(&id, &title, &branch, &ci, &ai); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"task_id": id, "title": title, "branch": branch, "ci_status": ci, "ai_review_status": ai})
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) ListPRs(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(task_id,''),COALESCE(branch,''),COALESCE(url,''),status
+	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(task_id,''),COALESCE(branch,''),COALESCE(url,''),status,
+		ci_status::text,ai_review_status::text,human_review_status::text
 		FROM pull_request WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
 	if err != nil {
 		return nil, err
@@ -257,11 +365,12 @@ func (d *DB) ListPRs(ctx context.Context, orgID string) ([]Row, error) {
 	defer rows.Close()
 	var out []Row
 	for rows.Next() {
-		var id, task, branch, url, st string
-		if err := rows.Scan(&id, &task, &branch, &url, &st); err != nil {
+		var id, task, branch, url, st, ci, ai, human string
+		if err := rows.Scan(&id, &task, &branch, &url, &st, &ci, &ai, &human); err != nil {
 			return nil, err
 		}
-		out = append(out, Row{"id": id, "task_id": task, "branch": branch, "url": url, "status": st})
+		out = append(out, Row{"id": id, "task_id": task, "branch": branch, "url": url, "status": st,
+			"ci_status": ci, "ai_review_status": ai, "human_review_status": human})
 	}
 	return out, rows.Err()
 }

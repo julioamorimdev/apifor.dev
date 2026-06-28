@@ -26,6 +26,10 @@ pub struct ExecResult {
     pub url: String,
 }
 
+fn repo_path(task_id: &str) -> PathBuf {
+    base_dir().join(task_id).join("repo")
+}
+
 fn base_dir() -> PathBuf {
     PathBuf::from(std::env::var("APIFOR_HOME").unwrap_or_else(|_| "/var/lib/apifor".into())).join("work")
 }
@@ -117,6 +121,125 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("mudança").trim().to_string()
+}
+
+// ───────────────────────── M4: test / review / merge ─────────────────────────
+// Reusam o workdir já clonado pelo exec (persistente em APIFOR_HOME/work/<task>).
+
+/// run_test — roda a checagem no workdir. Default: passa (sem testes configurados);
+/// APIFOR_TEST_CMD roda um comando real; APIFOR_TEST_FAIL=1 força falha (p/ demo do gate).
+pub fn run_test(task_id: &str, instr_json: &str) -> Result<(bool, String), String> {
+    let instr: Instr = serde_json::from_str(instr_json).map_err(|e| e.to_string())?;
+    let repo = repo_path(task_id);
+    if !repo.exists() {
+        return Err("workdir da tarefa ausente".into());
+    }
+    let _ = git(&repo, &["checkout", &instr.branch]);
+    if std::env::var("APIFOR_TEST_FAIL").ok().as_deref() == Some("1") {
+        return Ok((false, "teste falhou (APIFOR_TEST_FAIL=1)".into()));
+    }
+    match std::env::var("APIFOR_TEST_CMD") {
+        Ok(cmd) if !cmd.is_empty() => {
+            let out = Command::new("bash")
+                .current_dir(&repo)
+                .args(["-c", &cmd])
+                .output()
+                .map_err(|e| e.to_string())?;
+            let log = String::from_utf8_lossy(&out.stdout);
+            Ok((out.status.success(), format!("`{cmd}`: {}", log.trim().chars().take(160).collect::<String>())))
+        }
+        _ => Ok((true, "sem testes configurados (ok)".into())),
+    }
+}
+
+/// run_review — revisa o DIFF (fica local); só o veredicto vai ao cérebro.
+/// Anthropic com a chave do user (modelo do agente reviewer) ou stub.
+pub async fn run_review(task_id: &str, instr_json: &str, vault: &Vault) -> Result<(bool, String), String> {
+    let instr: Instr = serde_json::from_str(instr_json).map_err(|e| e.to_string())?;
+    let repo = repo_path(task_id);
+    if !repo.exists() {
+        return Err("workdir da tarefa ausente".into());
+    }
+    let diff = git(&repo, &["diff", &format!("{}..{}", instr.base_branch, instr.branch)]).unwrap_or_default();
+    if diff.trim().is_empty() {
+        return Ok((false, "diff vazio — nada a revisar".into()));
+    }
+    match vault.get("anthropic") {
+        Some(key) => review_with_llm(&key, &instr.change_request, &diff).await,
+        None => Ok((true, "stub: revisão aprovada (sem chave anthropic)".into())),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReviewJson {
+    #[serde(default)]
+    approved: bool,
+    #[serde(default)]
+    comments: String,
+}
+
+async fn review_with_llm(key: &str, change: &str, diff: &str) -> Result<(bool, String), String> {
+    let capped: String = diff.chars().take(12000).collect();
+    let system = "Você é um revisor de código sênior. Avalie o diff frente ao pedido e \
+        responda em JSON {\"approved\":bool,\"comments\":string}. Aprove se a mudança é \
+        correta e segura; senão approved=false com o motivo curto.";
+    let user = format!("PEDIDO:\n{change}\n\nDIFF:\n{capped}");
+    let schema = serde_json::json!({
+        "type":"object","additionalProperties":false,"required":["approved","comments"],
+        "properties":{"approved":{"type":"boolean"},"comments":{"type":"string"}}
+    });
+    let body = serde_json::json!({
+        "model":"claude-opus-4-8","max_tokens":1000,"system":system,
+        "output_config":{"format":{"type":"json_schema","schema":schema}},
+        "messages":[{"role":"user","content":user}]
+    });
+    let resp = reqwest::Client::new()
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let txt = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}"));
+    }
+    #[derive(serde::Deserialize)]
+    struct R {
+        content: Vec<B>,
+    }
+    #[derive(serde::Deserialize)]
+    struct B {
+        #[serde(default)]
+        text: String,
+    }
+    let parsed: R = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
+    let json_text: String = parsed.content.iter().map(|b| b.text.as_str()).collect();
+    let rj: ReviewJson = serde_json::from_str(json_text.trim()).map_err(|e| e.to_string())?;
+    Ok((rj.approved, rj.comments))
+}
+
+/// run_merge — integra o branch na base e dá push (respeita a estratégia básica).
+pub fn run_merge(task_id: &str, instr_json: &str) -> Result<String, String> {
+    let instr: Instr = serde_json::from_str(instr_json).map_err(|e| e.to_string())?;
+    let repo = repo_path(task_id);
+    if !repo.exists() {
+        return Err("workdir da tarefa ausente".into());
+    }
+    git(&repo, &["checkout", &instr.base_branch])?;
+    let msg = format!("apifor merge: {}", first_line(&instr.change_request));
+    git(
+        &repo,
+        &[
+            "-c", "user.email=bot@apifor.dev", "-c", "user.name=apifor bot",
+            "merge", "--no-ff", "-m", &msg, &instr.branch,
+        ],
+    )?;
+    git(&repo, &["push", "origin", &instr.base_branch])?;
+    Ok(format!("local:{}#{}", instr.repo_url, instr.base_branch))
 }
 
 // ───────────────────────── coder ─────────────────────────

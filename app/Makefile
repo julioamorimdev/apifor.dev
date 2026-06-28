@@ -2,7 +2,8 @@ SHELL := /bin/bash
 .PHONY: dev up down db migrate cerebro executor dashboard logs ps clean smoke \
         secret ipc-status task steps relay-demo git-remote repo prs pr-demo \
         usage plan devices revoke enforce-demo \
-        subscription invoices checkout billing-demo
+        subscription invoices checkout billing-demo \
+        interventions approve reject pipeline-demo
 
 dev: ; docker compose up --build
 
@@ -87,3 +88,12 @@ checkout: ; @curl -s -XPOST http://localhost:8088/v1/billing/checkout -H 'conten
 
 # demo de billing + dunning com eventos sintéticos do Stripe ASSINADOS
 billing-demo: ; @bash scripts/billing-demo.sh
+
+# ── M4.1: pipeline (gates) + intervenção ──
+
+interventions: ; @curl -s http://localhost:8088/v1/interventions; echo        # gates aguardando humano
+approve: ; @curl -s -XPOST http://localhost:8088/v1/interventions/$(TASK)/answer -H 'content-type: application/json' -d '{"decision":"approve"}'; echo  # destrava o merge (TASK=tsk_...)
+reject: ; @curl -s -XPOST http://localhost:8088/v1/interventions/$(TASK)/answer -H 'content-type: application/json' -d '{"decision":"reject"}'; echo
+
+# demo do pipeline completo: plan->exec->test->review->gate humano->merge
+pipeline-demo: ; @bash scripts/pipeline-demo.sh

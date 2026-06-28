@@ -268,38 +268,42 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
             }
             MsgType::DispatchStep => {
                 if let Some(Payload::DispatchStep(ds)) = &env.payload {
-                    println!("DispatchStep(exec): task={} — clonando/codando/PR LOCAL", ds.task_id);
-                    match exec::run(&ds.task_id, &ds.instructions, &vault).await {
-                        Ok(res) => {
-                            let output = serde_json::json!({"branch": res.branch, "url": res.url}).to_string();
-                            println!("exec ok: branch={} url={}", res.branch, res.url);
-                            tx.send(env_msg(
-                                MsgType::StepCompleted,
-                                Payload::StepEvent(StepEvent {
-                                    step_id: ds.step_id.clone(),
-                                    task_id: ds.task_id.clone(),
-                                    phase: StepPhase::Completed as i32,
-                                    output,
-                                    error: String::new(),
-                                }),
-                            ))
-                            .await?;
+                    println!("DispatchStep kind={} task={} (workdir LOCAL)", ds.kind, ds.task_id);
+                    // kind: 2=exec 3=test 4=review 5=merge
+                    let result: Result<serde_json::Value, String> = match ds.kind {
+                        2 => exec::run(&ds.task_id, &ds.instructions, &vault)
+                            .await
+                            .map(|r| serde_json::json!({"kind":"exec","branch":r.branch,"url":r.url})),
+                        3 => exec::run_test(&ds.task_id, &ds.instructions)
+                            .map(|(p, s)| serde_json::json!({"kind":"test","passed":p,"summary":s})),
+                        4 => exec::run_review(&ds.task_id, &ds.instructions, &vault)
+                            .await
+                            .map(|(a, c)| serde_json::json!({"kind":"review","approved":a,"comments":c})),
+                        5 => exec::run_merge(&ds.task_id, &ds.instructions)
+                            .map(|url| serde_json::json!({"kind":"merge","merged":true,"url":url})),
+                        k => Err(format!("kind {k} não suportado")),
+                    };
+                    let (msg_type, phase, output, error) = match result {
+                        Ok(out) => {
+                            println!("step kind={} ok: {out}", ds.kind);
+                            (MsgType::StepCompleted, StepPhase::Completed, out.to_string(), String::new())
                         }
                         Err(e) => {
-                            eprintln!("exec falhou: {e}");
-                            tx.send(env_msg(
-                                MsgType::StepFailed,
-                                Payload::StepEvent(StepEvent {
-                                    step_id: ds.step_id.clone(),
-                                    task_id: ds.task_id.clone(),
-                                    phase: StepPhase::Failed as i32,
-                                    output: String::new(),
-                                    error: e,
-                                }),
-                            ))
-                            .await?;
+                            eprintln!("step kind={} falhou: {e}", ds.kind);
+                            (MsgType::StepFailed, StepPhase::Failed, String::new(), e)
                         }
-                    }
+                    };
+                    tx.send(env_msg(
+                        msg_type,
+                        Payload::StepEvent(StepEvent {
+                            step_id: ds.step_id.clone(),
+                            task_id: ds.task_id.clone(),
+                            phase: phase as i32,
+                            output,
+                            error,
+                        }),
+                    ))
+                    .await?;
                 }
             }
             MsgType::RequestPlan => {

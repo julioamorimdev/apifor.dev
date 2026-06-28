@@ -121,6 +121,29 @@ Env do Stripe (compose passthrough): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET
 
 > Parciais do M3: graça de 5min (offline) e renovação automática de cert.
 
+## Pipeline com gates (M4.1)
+
+A tarefa com repositório percorre **plan → exec → test → review → merge**; o cérebro
+aplica os **gates server-side** entre as etapas: CI verde, revisão IA aprovada e
+(opcional) **revisão humana**. Se o gate humano está ligado, a tarefa fica `blocked`
+até alguém aprovar via `/v1/interventions` — aí o cérebro despacha o merge.
+
+```bash
+make pipeline-demo                 # plan->exec->test->review->gate humano->merge (remote local)
+make interventions                 # gates aguardando revisão humana
+make approve TASK=tsk_...          # destrava: aprova e despacha o merge
+make reject  TASK=tsk_...          # reprova: falha a tarefa
+```
+
+Steps: **test** roda `APIFOR_TEST_CMD` (default passa; `APIFOR_TEST_FAIL=1` força falha
+→ gate barra o merge), **review** chama a Anthropic (modelo reviewer) ou stub, **merge**
+integra o branch na base e dá push. Gate humano: `MERGE_REQUIRE_HUMAN=false` = auto-merge.
+REST: `GET /v1/interventions`, `POST /v1/interventions/{task}/answer`; PRs expõem
+`ci_status`/`ai_review_status`/`human_review_status`. Telas **Intervenção** + **PRs** (gates).
+
+> Parciais do M4 (→ **M4.2**): `agent_profile` (modelo por agente), reconciliação
+> (`TaskStateSnapshot` no reconnect), telas CI/QA/Logs/Telemetria.
+
 ## Estado
 - **M0** — fundação: serviços compilam e sobem, banco migrado.
 - **M1** — espinha e2e: login JWT → Enroll → stream gRPC → lease → dispatch → task `merged`.
@@ -147,5 +170,10 @@ Env do Stripe (compose passthrough): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET
   reaper rebaixa p/ Free); Checkout/Portal (real com chave, senão stub). Telas **Uso**
   (assinatura) + **Faturas**. Validado e2e com eventos sintéticos assinados.
 
-**M3 completo.** Próximo: **M4** (gates do pipeline: plan/exec/test/review/merge,
-agent_profile, merge rules, intervenção, reconciliação) ou hardening (M6).
+- **M4.1** — pipeline com gates: **plan→exec→test→review→merge** dirigido pelo cérebro;
+  gates server-side (CI verde / revisão IA / **revisão humana**); intervenção humana
+  destrava o merge (task `blocked` → `/v1/interventions` → merge). Telas **Intervenção**
+  + **PRs** (gates). Validado e2e (gate humano, auto-merge, teste falhando barra o merge).
+
+**M3 completo; M4 em curso.** Próximo: **M4.2** (agent_profile, reconciliação, telas
+CI/QA/Logs) ou **M5** (multi-tenant/Team) ou hardening (M6).
