@@ -30,7 +30,7 @@ services:
           echo "schema já aplicado; pulando"
           exit 0
         fi
-        for f in /sql/001_schema.sql /sql/002_rls.sql /sql/003_seeds.sql /sql/004_rls_role.sql; do
+        for f in /sql/001_schema.sql /sql/002_rls.sql /sql/003_seeds.sql /sql/004_rls_role.sql /sql/005_worker_role.sql; do
           echo "applying $$f"
           psql "$$DB" -v ON_ERROR_STOP=1 -f "$$f"
         done
@@ -42,8 +42,10 @@ services:
       CEREBRO_ADDR: ":8080"
       CEREBRO_GRPC: ":9090"
       DATABASE_URL: "postgres://postgres:pg@postgres/apifor?sslmode=disable"
-      # M6.3: pool da app (role não-superuser) p/ enforcement de RLS nos reads
+      # M6.3: pool da app (role não-superuser) p/ enforcement de RLS nos reads/writes do REST
       APP_DATABASE_URL: "postgres://apifor_app:apppw@postgres/apifor?sslmode=disable"
+      # M6.5: pool primário dos workers (NOSUPERUSER, BYPASSRLS) — tira o superuser do runtime
+      WORKER_DATABASE_URL: "postgres://apifor_worker:workerpw@postgres/apifor?sslmode=disable"
       JWT_SECRET: "dev-secret"
       # M3.1 enforcement — knobs de teste (encolhem 4h/36h p/ segundos). 0/ausente = produção.
       LEASE_TTL_SEC: "${LEASE_TTL_SEC:-}"

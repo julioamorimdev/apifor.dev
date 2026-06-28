@@ -540,14 +540,14 @@ func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	switch in.Decision {
 	case "approve":
-		if err := a.DB.ApproveHumanReview(r.Context(), taskID); err != nil {
+		if err := a.DB.ApproveHumanReview(r.Context(), a.orgFrom(r), taskID); err != nil {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
 		}
 		a.dispatchMerge(r.Context(), taskID)
 		writeJSON(w, 200, map[string]any{"task_id": taskID, "decision": "approve", "merging": true})
 	case "reject":
-		if err := a.DB.RejectHumanReview(r.Context(), taskID, in.Note); err != nil {
+		if err := a.DB.RejectHumanReview(r.Context(), a.orgFrom(r), taskID, in.Note); err != nil {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
 		}
@@ -841,7 +841,7 @@ func (a *API) deviceRevoke(w http.ResponseWriter, r *http.Request) {
 	if !a.requireCap(w, r, "manage") {
 		return
 	}
-	if err := a.DB.RevokeDevice(r.Context(), id); err != nil {
+	if err := a.DB.RevokeDevice(r.Context(), a.orgFrom(r), id); err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}

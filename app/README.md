@@ -259,7 +259,13 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   e telas **Início** (onboarding) + **Planos** (pricing) na GUI. Validado: telas compilam,
   artefatos de serviço bem-formados.
 
-**M3, M4 e M5 completos; M6 (RLS reads+creates) e M7 (serviço/onboarding/preços) parciais.**
+- **M6.5** — **RLS completo + runtime sem superuser**: updates/deletes do REST
+  (`SetPlan`/`RevokeDevice`/`RemoveMember`/`DeleteMemory`/`DeleteRoutine`/`Approve`+`Reject`)
+  via `apifor_app` (o `USING` bloqueia update/delete cross-tenant); o cérebro deixa de usar
+  `postgres` — pool primário vira **`apifor_worker`** (NOSUPERUSER, BYPASSRLS). Validado:
+  contexto=B `DELETE` da org A → *DELETE 0*; roles super=false.
+
+**M3–M5 completos; M6 completo (RLS reads/creates/updates/deletes, sem superuser); M7 parcial.**
 Falta: installer Tauri buildado + auto-update, cloud workers / SSO-SAML (infra externa).
 
 ## Empacotamento (M7)
