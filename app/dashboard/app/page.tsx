@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { badge, card, cell, Page, short, tableStyle } from "./ui";
+import { badge, card, cell, Page, short, sseURL, tableStyle } from "./ui";
 
 type Worker = { id: string; source: string; status: string; current_step: string };
 type Task = { id: string; title: string; status: string };
@@ -10,7 +10,7 @@ export default function Live() {
   const [live, setLive] = useState(false);
 
   useEffect(() => {
-    const es = new EventSource("/api/v1/workers/stream");
+    const es = new EventSource(sseURL("/v1/workers/stream"));
     es.onopen = () => setLive(true);
     es.onerror = () => setLive(false);
     es.onmessage = (e) => setD(JSON.parse(e.data));

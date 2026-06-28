@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { apiPost, badge, btn, card, cell, Page, tableStyle } from "../ui";
+import { apiPost, badge, btn, card, cell, Page, sseURL, tableStyle } from "../ui";
 
 type Notif = { id: string; type: string; title: string; body: string; link: string; read: boolean; date: string };
 const tone = (t: string) => (t === "merge" ? "merged" : t === "fail" || t === "lease" ? "failed" : t === "intervention" ? "queued" : "running");
@@ -8,7 +8,7 @@ const tone = (t: string) => (t === "merge" ? "merged" : t === "fail" || t === "l
 export default function Notificacoes() {
   const [items, setItems] = useState<Notif[]>([]);
   useEffect(() => {
-    const es = new EventSource("/api/v1/notifications/stream");
+    const es = new EventSource(sseURL("/v1/notifications/stream"));
     es.onmessage = (e) => { try { setItems(JSON.parse(e.data).notifications || []); } catch {} };
     return () => es.close();
   }, []);

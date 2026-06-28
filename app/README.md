@@ -253,11 +253,14 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   cross-tenant**. Provado: contexto=A, `INSERT org_id=B` → *RLS policy violation*; creates
   normais funcionam. Updates/deletes + workers seguem no superuser (documentado).
 
-- **M7** — **empacotamento & launch** (parcial): **serviço de fundo** do executor
-  ([`deploy/`](deploy): `sudo deploy/install.sh` — systemd no Linux, launchd no macOS),
-  scaffold do **app desktop Tauri** ([`desktop/`](desktop), precisa do toolchain p/ buildar),
-  e telas **Início** (onboarding) + **Planos** (pricing) na GUI. Validado: telas compilam,
-  artefatos de serviço bem-formados.
+- **M7** — **empacotamento & launch**: **serviço de fundo** do executor
+  ([`deploy/`](deploy): `sudo deploy/install.sh` — systemd/launchd), **app desktop Tauri v2**
+  build-ready ([`desktop/`](desktop): conf/Cargo/main.rs/capabilities + sidecar do executor),
+  GUI **export-estático** (`NEXT_EXPORT=1`, API base configurável), **workflow de release**
+  ([`.github/workflows/release.yml`](../.github/workflows/release.yml): tauri-action → instaladores
+  3 OS + auto-update), e telas **Início**/**Planos**. Validado: build normal + export (`out/`),
+  JSON/YAML e artefatos de serviço bem-formados. **Build do installer roda no host/CI com o
+  toolchain Tauri + chaves de assinatura** (não executável aqui).
 
 - **M6.5** — **RLS completo + runtime sem superuser**: updates/deletes do REST
   (`SetPlan`/`RevokeDevice`/`RemoveMember`/`DeleteMemory`/`DeleteRoutine`/`Approve`+`Reject`)

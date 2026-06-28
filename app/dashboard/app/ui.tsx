@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 function useUnread() {
   const [n, setN] = useState(0);
   useEffect(() => {
-    const es = new EventSource("/api/v1/notifications/stream");
+    const es = new EventSource(sseURL("/v1/notifications/stream"));
     es.onmessage = (e) => { try { setN(JSON.parse(e.data).unread || 0); } catch {} };
     return () => es.close();
   }, []);
@@ -136,7 +136,12 @@ function authHeaders(): Record<string, string> {
 }
 
 // ── data fetching ──
-const API = (p: string) => "/api" + p;
+// Base da API: em dev usa o proxy "/api" (rewrite do Next p/ o cérebro). No build
+// estático (desktop Tauri), defina NEXT_PUBLIC_API_BASE com a URL do cérebro remoto.
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
+const API = (p: string) => API_BASE + p;
+/** URL absoluta/relativa p/ um stream SSE (EventSource). */
+export const sseURL = (p: string) => API_BASE + p;
 
 export async function apiGet<T = any>(p: string): Promise<T> {
   const r = await fetch(API(p), { headers: authHeaders() });
