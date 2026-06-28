@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
-import { apiPost, badge, btn, card, CardHead, cell, codeDim, Page, PageHead, sseURL, tableStyle, thCell } from "../ui";
+import { apiPost, badge, btn, card, CardHead, cell, codeDim, Page, PageHead, sseURL, tableStyle, thCell, useT } from "../ui";
 
 type Notif = { id: string; type: string; title: string; body: string; link: string; read: boolean; date: string };
 const tone = (t: string) => (t === "merge" ? "merged" : t === "fail" || t === "lease" ? "failed" : t === "intervention" ? "queued" : "running");
 
 export default function Notificacoes() {
+  const t = useT();
   const [items, setItems] = useState<Notif[]>([]);
   useEffect(() => {
     const es = new EventSource(sseURL("/v1/notifications/stream"));
@@ -19,11 +20,11 @@ export default function Notificacoes() {
   return (
     <Page>
       <PageHead eyebrow="Operação" title="Notificações" subtitle="Eventos do cérebro em tempo real (SSE)."
-        right={<button style={btn} onClick={markRead}>marcar todas como lidas</button>} />
+        right={<button style={btn} onClick={markRead}>{t("marcar todas como lidas")}</button>} />
       <div style={card}>
         <CardHead title="Notificações" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>{unread} não-lida(s) · {items.length} total</span>} />
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Tipo</th><th style={thCell}>Título</th><th style={thCell}>Detalhe</th><th style={thCell}>Quando</th><th style={{ ...thCell, textAlign: "right" }}></th></tr></thead>
+          <thead><tr><th style={thCell}>{t("Tipo")}</th><th style={thCell}>{t("Título")}</th><th style={thCell}>{t("Detalhe")}</th><th style={thCell}>{t("Quando")}</th><th style={{ ...thCell, textAlign: "right" }}></th></tr></thead>
           <tbody>
             {items.map((n) => (
               <tr key={n.id} style={{ opacity: n.read ? 0.55 : 1 }}>
@@ -34,7 +35,7 @@ export default function Notificacoes() {
                 <td style={{ ...cell, textAlign: "right" }}>{n.link && <a href={n.link} style={{ color: "var(--blue)", fontSize: 13 }}>abrir →</a>}</td>
               </tr>
             ))}
-            {!items.length && <tr><td style={cell} colSpan={5}>nenhuma notificação</td></tr>}
+            {!items.length && <tr><td style={cell} colSpan={5}>{t("nenhuma notificação")}</td></tr>}
           </tbody>
         </table>
       </div>

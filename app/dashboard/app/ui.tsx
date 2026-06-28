@@ -102,6 +102,29 @@ const TR: Record<string, string> = {
   // pills + buckets
   "Todos": "All", "Na fila": "In queue", "Em execução": "Running", "Encerradas": "Closed", "Em revisão": "In review",
   "CI falhou": "CI failed", "Falhou": "Failed", "OK": "OK",
+  // cabeçalhos de tabela
+  "Tarefa": "Task", "Título": "Title", "Estado": "State", "Branch": "Branch", "Status": "Status", "Nome": "Name",
+  "Tipo": "Type", "Data": "Date", "Provider": "Provider", "Ações": "Actions", "Quando": "When", "Ator": "Actor",
+  "Ação": "Action", "Alvo": "Target", "Humano": "Human", "Concluído": "Finished", "Testes": "Tests", "Execução": "Run",
+  "Local": "Location", "Fingerprint": "Fingerprint", "Clone URL": "Clone URL", "Escopo": "Scope", "Instrução": "Instruction",
+  "Origem": "Source", "Categoria": "Category", "Indexado": "Indexed", "Email": "Email", "Papel": "Role",
+  "Visto por último": "Last seen", "Device": "Device", "Trigger": "Trigger", "Último": "Last", "Detalhe": "Detail", "PR": "PR",
+  // botões / ações
+  "Adicionar": "Add", "Registrar": "Register", "Criar": "Create", "Criar rotina": "Create routine", "Criar → planejar": "Create → plan",
+  "Entrar": "Sign in", "remover": "remove", "excluir": "delete", "exportar CSV": "export CSV", "marcar todas como lidas": "mark all as read",
+  "ver plano": "view plan", "ocultar": "hide", "abrir": "open", "aprovar": "approve", "reprovar": "reject", "run": "run",
+  "pausar": "pause", "ativar": "enable", "conectar": "connect", "sair": "sign out", "registrar": "register", "fazer login": "sign in",
+  "Assinar Pro (Stripe)": "Subscribe Pro (Stripe)",
+  // placeholders
+  "Buscar tarefa…": "Search task…", "Buscar PR…": "Search PR…", "Buscar execução…": "Search run…", "Buscar log…": "Search log…",
+  "nome": "name", "título": "title", "senha": "password", "branch": "branch",
+  // empty states
+  "nenhuma tarefa": "no tasks", "nenhum PR ainda": "no PRs yet", "fila vazia": "empty queue", "nenhuma execução de CI": "no CI runs",
+  "nenhum relatório de QA": "no QA reports", "nenhum worker ligado": "no worker connected", "nenhuma rotina": "no routines",
+  "nenhum repositório": "no repositories", "nenhum segredo registrado": "no secret registered", "nenhuma memória": "no memory",
+  "nenhum documento de KB": "no KB document", "nenhum membro (faça login)": "no members (sign in)", "nenhum workspace": "no workspace",
+  "nenhuma intervenção pendente": "no pending intervention", "nenhum evento de auditoria": "no audit event",
+  "nenhuma notificação": "no notification", "nenhum device": "no device", "nenhuma fatura": "no invoice", "nenhum log ainda": "no logs yet",
 };
 const tr = (lang: string, s?: string) => (lang === "en" && s ? TR[s] || s : s);
 
@@ -483,7 +506,7 @@ function Topbar() {
       </button>
       <span style={{ flex: 1 }} />
       <span style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: running ? "var(--green-tint)" : "var(--border)", color: running ? "var(--green)" : "var(--mute)" }}>
-        <span style={{ width: 7, height: 7, borderRadius: 7, background: "currentColor" }} />{running ? "RODANDO" : "PARADO"}
+        <span style={{ width: 7, height: 7, borderRadius: 7, background: "currentColor" }} />{running ? (lang === "en" ? "RUNNING" : "RODANDO") : (lang === "en" ? "STOPPED" : "PARADO")}
       </span>
       <LangMenu lang={lang} setLang={setLang} />
       <button className="apf-iconbtn" style={ic} onClick={toggle} title="Alternar tema">{theme === "dark" ? "☀️" : "🌙"}</button>

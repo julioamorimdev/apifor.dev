@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { badge, card, cell, codeAmber, codeDim, input, Page, PageHead, Pills, short, StatCard, tableStyle, thCell, usePoll } from "../ui";
+import { badge, card, cell, codeAmber, codeDim, input, Page, PageHead, Pills, short, StatCard, tableStyle, thCell, usePoll, useT } from "../ui";
 
 type PR = {
   id: string; task_id: string; branch: string; url: string; status: string;
@@ -11,6 +11,7 @@ const gate = (s: string) => badge(s === "passed" || s === "approved" ? "merged" 
 const FILTERS: [string, string][] = [["all", "Todos"], ["review", "Em revisão"], ["cifail", "CI falhou"]];
 
 export default function PRs() {
+  const t = useT();
   const { data: prs } = usePoll<PR[]>("/v1/prs", 2500);
   const list = prs || [];
   const [f, setF] = useState("all");
@@ -35,11 +36,11 @@ export default function PRs() {
 
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar PR…" style={{ ...input, flex: 1, minWidth: 160 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar PR…")} style={{ ...input, flex: 1, minWidth: 160 }} />
           <Pills options={FILTERS} value={f} onChange={setF} />
         </div>
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Pull Request</th><th style={thCell}>CI</th><th style={thCell}>IA</th><th style={thCell}>Humano</th><th style={{ ...thCell, textAlign: "right" }}>Estado</th></tr></thead>
+          <thead><tr><th style={thCell}>Pull Request</th><th style={thCell}>CI</th><th style={thCell}>IA</th><th style={thCell}>{t("Humano")}</th><th style={{ ...thCell, textAlign: "right" }}>{t("Estado")}</th></tr></thead>
           <tbody>
             {rows.map((p) => (
               <tr key={p.id}>
@@ -53,7 +54,7 @@ export default function PRs() {
                 <td style={{ ...cell, textAlign: "right" }}><span style={badge(p.status)}>{p.status}</span></td>
               </tr>
             ))}
-            {!rows.length && <tr><td style={cell} colSpan={5}>nenhum PR ainda</td></tr>}
+            {!rows.length && <tr><td style={cell} colSpan={5}>{t("nenhum PR ainda")}</td></tr>}
           </tbody>
         </table>
         <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} pull request(s)</div>

@@ -1,9 +1,10 @@
 "use client";
-import { btn, card, CardHead, cell, codeAmber, codeDim, getToken, Page, PageHead, short, tableStyle, thCell, usePoll } from "../ui";
+import { btn, card, CardHead, cell, codeAmber, codeDim, getToken, Page, PageHead, short, tableStyle, thCell, usePoll, useT } from "../ui";
 
 type Audit = { when: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string };
 
 export default function Auditoria() {
+  const t = useT();
   const { data: rows } = usePoll<Audit[]>("/v1/audit", 4000);
   const list = rows || [];
 
@@ -22,11 +23,11 @@ export default function Auditoria() {
   return (
     <Page>
       <PageHead eyebrow="Conhecimento & sistema" title="Auditoria" subtitle="Quem fez o quê — server-side."
-        right={<button style={btn} onClick={exportCSV}>exportar CSV</button>} />
+        right={<button style={btn} onClick={exportCSV}>{t("exportar CSV")}</button>} />
       <div style={card}>
         <CardHead title="Trilha de auditoria" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>{list.length} evento(s)</span>} />
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Quando</th><th style={thCell}>Ator</th><th style={thCell}>Ação</th><th style={thCell}>Alvo</th></tr></thead>
+          <thead><tr><th style={thCell}>{t("Quando")}</th><th style={thCell}>{t("Ator")}</th><th style={thCell}>{t("Ação")}</th><th style={thCell}>{t("Alvo")}</th></tr></thead>
           <tbody>
             {list.map((a, i) => (
               <tr key={i}>
@@ -36,7 +37,7 @@ export default function Auditoria() {
                 <td style={cell}>{a.target_type} {a.target_id}</td>
               </tr>
             ))}
-            {!list.length && <tr><td style={cell} colSpan={4}>nenhum evento de auditoria</td></tr>}
+            {!list.length && <tr><td style={cell} colSpan={4}>{t("nenhum evento de auditoria")}</td></tr>}
           </tbody>
         </table>
       </div>

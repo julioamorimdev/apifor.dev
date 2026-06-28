@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, useState } from "react";
-import { apiGet, apiPost, badge, btn, card, CardHead, cell, codeAmber, input, Page, PageHead, tableStyle, usePoll } from "../ui";
+import { apiGet, apiPost, badge, btn, card, CardHead, cell, codeAmber, input, Page, PageHead, tableStyle, usePoll, useT } from "../ui";
 
 type Task = { id: string; title: string; status: string; assigned_worker_id?: string };
 type Repo = { id: string; name: string };
@@ -8,6 +8,7 @@ type Step = { idx: number; type: string; label: string; status: string };
 const th = { ...cell, color: "var(--mute)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: ".06em", fontWeight: 600 };
 
 export default function Tarefas() {
+  const t = useT();
   const { data: tasks, reload } = usePoll<Task[]>("/v1/tasks");
   const { data: repos } = usePoll<Repo[]>("/v1/repos", 5000);
   const [title, setTitle] = useState("Adicionar endpoint /health");
@@ -36,7 +37,7 @@ export default function Tarefas() {
       <div style={card}>
         <CardHead title="Nova tarefa" />
         <div style={{ padding: 16, display: "grid", gap: 10 }}>
-          <input style={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="título" />
+          <input style={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("título")} />
           <textarea style={{ ...input, minHeight: 64, resize: "vertical" }} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="pedido (prompt — vira o template do relay)" />
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <input style={{ ...input, flex: 2, minWidth: 180 }} value={refs} onChange={(e) => setRefs(e.target.value)} placeholder="refs (arquivos de contexto, separados por vírgula)" />
@@ -44,7 +45,7 @@ export default function Tarefas() {
               <option value="">(sem repo — só planeja)</option>
               {(repos || []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
-            <button style={btn} onClick={create}>Criar → planejar</button>
+            <button style={btn} onClick={create}>{t("Criar → planejar")}</button>
           </div>
           <span style={{ color: "var(--mute)", fontSize: 12 }}>Com repo: planeja → clona → coda → push → PR. Sem repo: só o plano.</span>
         </div>
@@ -53,7 +54,7 @@ export default function Tarefas() {
       <div style={card}>
         <CardHead title="Tarefas" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>{(tasks || []).length} total</span>} />
         <table style={tableStyle}>
-          <thead><tr><th style={th}>Tarefa</th><th style={th}>Título</th><th style={th}>Estado</th><th style={{ ...th, textAlign: "right" }}>Plano</th></tr></thead>
+          <thead><tr><th style={th}>{t("Tarefa")}</th><th style={th}>{t("Título")}</th><th style={th}>{t("Estado")}</th><th style={{ ...th, textAlign: "right" }}>Plano</th></tr></thead>
           <tbody>
             {(tasks || []).map((t) => (
               <Fragment key={t.id}>
@@ -76,7 +77,7 @@ export default function Tarefas() {
                 )}
               </Fragment>
             ))}
-            {!tasks?.length && <tr><td style={cell} colSpan={4}>nenhuma tarefa</td></tr>}
+            {!tasks?.length && <tr><td style={cell} colSpan={4}>{t("nenhuma tarefa")}</td></tr>}
           </tbody>
         </table>
       </div>

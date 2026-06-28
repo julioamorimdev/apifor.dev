@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
-import { apiDelete, apiPost, badge, btn, card, CardHead, cell, codeDim, input, Page, PageHead, short, tableStyle, thCell, usePoll } from "../ui";
+import { apiDelete, apiPost, badge, btn, card, CardHead, cell, codeDim, input, Page, PageHead, short, tableStyle, thCell, usePoll, useT } from "../ui";
 
 type Memory = { id: string; scope: string; repo_id: string; instruction: string; source: string };
 type KB = { id: string; name: string; category: string; file_ref: string; indexed: boolean };
 type Repo = { id: string; name: string };
 
 export default function Knowledge() {
+  const t = useT();
   const { data: memories, reload } = usePoll<Memory[]>("/v1/memories", 3000);
   const { data: kb } = usePoll<KB[]>("/v1/kb-documents", 3000);
   const { data: repos } = usePoll<Repo[]>("/v1/repos", 5000);
@@ -38,20 +39,20 @@ export default function Knowledge() {
             </select>
           )}
           <input style={{ ...input, flex: 1, minWidth: 200 }} placeholder="instrução (ex.: sempre adicione testes)" value={f.instr} onChange={(e) => set("instr", e.target.value)} />
-          <button style={btn} onClick={addMem}>Adicionar</button>
+          <button style={btn} onClick={addMem}>{t("Adicionar")}</button>
         </div>
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Escopo</th><th style={thCell}>Instrução</th><th style={thCell}>Origem</th><th style={{ ...thCell, textAlign: "right" }}></th></tr></thead>
+          <thead><tr><th style={thCell}>{t("Escopo")}</th><th style={thCell}>{t("Instrução")}</th><th style={thCell}>{t("Origem")}</th><th style={{ ...thCell, textAlign: "right" }}></th></tr></thead>
           <tbody>
             {(memories || []).map((m) => (
               <tr key={m.id}>
                 <td style={cell}><span style={badge(m.scope === "global" ? "open" : "idle")}>{m.scope}{m.repo_id ? " " + short(m.repo_id, 10) : ""}</span></td>
                 <td style={cell}>{m.instruction}</td>
                 <td style={cell}>{m.source}</td>
-                <td style={{ ...cell, textAlign: "right" }}><a onClick={() => delMem(m.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>excluir</a></td>
+                <td style={{ ...cell, textAlign: "right" }}><a onClick={() => delMem(m.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>{t("excluir")}</a></td>
               </tr>
             ))}
-            {!memories?.length && <tr><td style={cell} colSpan={4}>nenhuma memória</td></tr>}
+            {!memories?.length && <tr><td style={cell} colSpan={4}>{t("nenhuma memória")}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -64,7 +65,7 @@ export default function Knowledge() {
           o agente lê o conteúdo localmente no planejamento.
         </div>
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Nome</th><th style={thCell}>Categoria</th><th style={thCell}>file_ref</th><th style={thCell}>Indexado</th></tr></thead>
+          <thead><tr><th style={thCell}>{t("Nome")}</th><th style={thCell}>{t("Categoria")}</th><th style={thCell}>file_ref</th><th style={thCell}>{t("Indexado")}</th></tr></thead>
           <tbody>
             {(kb || []).map((k) => (
               <tr key={k.id}>
@@ -74,7 +75,7 @@ export default function Knowledge() {
                 <td style={cell}>{k.indexed ? "sim" : "não"}</td>
               </tr>
             ))}
-            {!kb?.length && <tr><td style={cell} colSpan={4}>nenhum documento de KB</td></tr>}
+            {!kb?.length && <tr><td style={cell} colSpan={4}>{t("nenhum documento de KB")}</td></tr>}
           </tbody>
         </table>
       </div>

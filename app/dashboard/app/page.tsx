@@ -1,5 +1,5 @@
 "use client";
-import { badge, card, CardHead, cell, Page, PageHead, short, StateBar, StatCard, tableStyle, useSeries, usePoll } from "./ui";
+import { badge, card, CardHead, cell, Page, PageHead, short, StateBar, StatCard, tableStyle, useSeries, usePoll, useT } from "./ui";
 
 type Worker = { id: string; source: string; status: string; current_step: string };
 type Task = { id: string; status: string };
@@ -15,6 +15,7 @@ const BUCKETS = [
 ];
 
 export default function Dashboard() {
+  const t = useT();
   const { data: workers } = usePoll<Worker[]>("/v1/workers", 2500);
   const { data: tasks } = usePoll<Task[]>("/v1/tasks", 2500);
   const { data: prs } = usePoll<PR[]>("/v1/prs", 3000);
@@ -80,7 +81,7 @@ export default function Dashboard() {
             {w.map((x) => (
               <tr key={x.id}><td style={cell}><code style={{ color: "var(--accent)", fontSize: 12 }}>{short(x.id)}</code></td><td style={cell}>{x.source}</td><td style={cell}><span style={badge(x.status)}>{x.status}</span></td><td style={cell}>{x.current_step || "—"}</td></tr>
             ))}
-            {!w.length && <tr><td style={cell} colSpan={4}>nenhum worker ligado</td></tr>}
+            {!w.length && <tr><td style={cell} colSpan={4}>{t("nenhum worker ligado")}</td></tr>}
           </tbody>
         </table>
       </div>

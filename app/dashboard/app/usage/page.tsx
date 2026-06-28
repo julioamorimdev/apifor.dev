@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost, badge, btn, card, CardHead, cell, MeterCard, Page, PageHead, short, tableStyle, usePoll } from "../ui";
+import { apiGet, apiPost, badge, btn, card, CardHead, cell, MeterCard, Page, PageHead, short, tableStyle, usePoll, useT } from "../ui";
 
 type Usage = {
   plan: string;
@@ -18,6 +18,7 @@ const PLANS = ["free", "pro", "team", "enterprise"];
 const th = { ...cell, color: "var(--mute)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: ".06em", fontWeight: 600 };
 
 export default function UsoTela() {
+  const t = useT();
   const [u, setU] = useState<Usage | null>(null);
   const [sub, setSub] = useState<Sub | null>(null);
   const [checkout, setCheckout] = useState<string>("");
@@ -65,7 +66,7 @@ export default function UsoTela() {
       <div style={card}>
         <CardHead title="Assinatura" />
         <div style={{ padding: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button style={btn} onClick={() => stripeCheckout("pro")}>Assinar Pro (Stripe)</button>
+          <button style={btn} onClick={() => stripeCheckout("pro")}>{t("Assinar Pro (Stripe)")}</button>
           {PLANS.map((p) => (
             <button key={p} style={{ ...btn, background: u?.plan === p ? "var(--green)" : "var(--elev)", color: u?.plan === p ? "var(--accent-ink)" : "var(--dim)" }} onClick={() => setPlan(p)}>{p}</button>
           ))}
@@ -79,7 +80,7 @@ export default function UsoTela() {
       <div style={card}>
         <CardHead title="Dispositivos" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>kill-switch (mTLS)</span>} />
         <table style={tableStyle}>
-          <thead><tr><th style={th}>Device</th><th style={th}>Visto por último</th><th style={th}>Status</th><th style={{ ...th, textAlign: "right" }}></th></tr></thead>
+          <thead><tr><th style={th}>{t("Device")}</th><th style={th}>{t("Visto por último")}</th><th style={th}>{t("Status")}</th><th style={{ ...th, textAlign: "right" }}></th></tr></thead>
           <tbody>
             {(devices || []).map((d) => (
               <tr key={d.id}>
@@ -89,7 +90,7 @@ export default function UsoTela() {
                 <td style={{ ...cell, textAlign: "right" }}>{d.status === "active" && <a onClick={() => revoke(d.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>revogar</a>}</td>
               </tr>
             ))}
-            {!devices?.length && <tr><td style={cell} colSpan={4}>nenhum device</td></tr>}
+            {!devices?.length && <tr><td style={cell} colSpan={4}>{t("nenhum device")}</td></tr>}
           </tbody>
         </table>
       </div>

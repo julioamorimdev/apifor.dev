@@ -1,12 +1,13 @@
 "use client";
 import { useState } from "react";
-import { badge, card, cell, codeAmber, codeDim, input, Page, PageHead, Pills, short, StatCard, tableStyle, thCell, usePoll } from "../ui";
+import { badge, card, cell, codeAmber, codeDim, input, Page, PageHead, Pills, short, StatCard, tableStyle, thCell, usePoll, useT } from "../ui";
 
 type QA = { id: string; task_id: string; status: string; tests_total: number; tests_passed: number; date: string };
 
 const FILTERS: [string, string][] = [["all", "Todos"], ["passed", "Aprovados"], ["failed", "Falhas"]];
 
 export default function QATela() {
+  const t = useT();
   const { data: reports } = usePoll<QA[]>("/v1/qa", 2500);
   const list = reports || [];
   const [f, setF] = useState("all");
@@ -31,11 +32,11 @@ export default function QATela() {
 
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar tarefa…" style={{ ...input, flex: 1, minWidth: 160 }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar tarefa…")} style={{ ...input, flex: 1, minWidth: 160 }} />
           <Pills options={FILTERS} value={f} onChange={setF} />
         </div>
         <table style={tableStyle}>
-          <thead><tr><th style={thCell}>Tarefa</th><th style={thCell}>Status</th><th style={thCell}>Testes</th><th style={{ ...thCell, textAlign: "right" }}>Data</th></tr></thead>
+          <thead><tr><th style={thCell}>{t("Tarefa")}</th><th style={thCell}>{t("Status")}</th><th style={thCell}>{t("Testes")}</th><th style={{ ...thCell, textAlign: "right" }}>{t("Data")}</th></tr></thead>
           <tbody>
             {rows.map((x) => (
               <tr key={x.id}>
@@ -48,7 +49,7 @@ export default function QATela() {
                 <td style={{ ...cell, textAlign: "right" }}>{x.date}</td>
               </tr>
             ))}
-            {!rows.length && <tr><td style={cell} colSpan={4}>nenhum relatório de QA</td></tr>}
+            {!rows.length && <tr><td style={cell} colSpan={4}>{t("nenhum relatório de QA")}</td></tr>}
           </tbody>
         </table>
         <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} relatório(s)</div>
