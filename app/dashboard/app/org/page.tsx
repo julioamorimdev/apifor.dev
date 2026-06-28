@@ -39,20 +39,20 @@ export default function Org() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Sessão</h3>
+      <h3 style={{ color: "var(--dim)" }}>Sessão</h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ color: "#697079" }}>org:</span> <code>{me?.org_id || "—"}</code>
-        <span style={{ color: "#697079" }}>papel:</span> <span style={badge(me?.role === "owner" ? "open" : "idle")}>{me?.role || "—"}</span>
+        <span style={{ color: "var(--mute)" }}>org:</span> <code>{me?.org_id || "—"}</code>
+        <span style={{ color: "var(--mute)" }}>papel:</span> <span style={badge(me?.role === "owner" ? "open" : "idle")}>{me?.role || "—"}</span>
         <span style={{ flex: 1 }} />
         <input style={{ ...input, width: 150 }} placeholder="email" value={f.email} onChange={(e) => set("email", e.target.value)} />
         <input style={{ ...input, width: 110 }} type="password" placeholder="senha" value={f.password} onChange={(e) => set("password", e.target.value)} />
         {authMode === "register" && <input style={{ ...input, width: 120 }} placeholder="nome da org" value={f.org} onChange={(e) => set("org", e.target.value)} />}
         <button style={btn} onClick={auth}>{authMode === "login" ? "Entrar" : "Criar org"}</button>
-        <a onClick={() => setAuthMode(authMode === "login" ? "register" : "login")} style={{ color: "#5BA9FF", cursor: "pointer", fontSize: 13 }}>{authMode === "login" ? "registrar" : "fazer login"}</a>
-        <button style={{ ...btn, background: "#2A2D34", color: "#9BA1A9" }} onClick={logout}>sair</button>
+        <a onClick={() => setAuthMode(authMode === "login" ? "register" : "login")} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13 }}>{authMode === "login" ? "registrar" : "fazer login"}</a>
+        <button style={{ ...btn, background: "#2A2D34", color: "var(--dim)" }} onClick={logout}>sair</button>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Membros</h3>
+      <h3 style={{ color: "var(--dim)" }}>Membros</h3>
       {canManage && (
         <div style={{ ...card, padding: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input style={{ ...input, flex: 1, minWidth: 150 }} placeholder="email" value={f.mEmail} onChange={(e) => set("mEmail", e.target.value)} />
@@ -72,7 +72,7 @@ export default function Org() {
                 <td style={cell}>{m.email}</td>
                 <td style={cell}><span style={badge(m.role === "owner" ? "open" : "idle")}>{m.role}</span></td>
                 <td style={cell}>{m.status}</td>
-                <td style={cell}>{canManage && m.role !== "owner" && <a onClick={() => removeMember(m.id)} style={{ color: "#F85149", cursor: "pointer", fontSize: 13 }}>remover</a>}</td>
+                <td style={cell}>{canManage && m.role !== "owner" && <a onClick={() => removeMember(m.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>remover</a>}</td>
               </tr>
             ))}
             {!members.length && <tr><td style={cell} colSpan={4}>nenhum membro (faça login)</td></tr>}
@@ -80,7 +80,7 @@ export default function Org() {
         </table>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Workspaces</h3>
+      <h3 style={{ color: "var(--dim)" }}>Workspaces</h3>
       {canManage && (
         <div style={{ ...card, padding: 16, display: "flex", gap: 10 }}>
           <input style={{ ...input, flex: 1 }} placeholder="nome do workspace" value={f.ws} onChange={(e) => set("ws", e.target.value)} />

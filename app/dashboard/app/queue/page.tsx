@@ -10,7 +10,7 @@ export default function Fila() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Fila <span style={{ color: "#697079", fontSize: 13 }}>(tarefas em andamento)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>Fila <span style={{ color: "var(--mute)", fontSize: 13 }}>(tarefas em andamento)</span></h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>id</th><th style={cell}>título</th><th style={cell}>status</th></tr></thead>

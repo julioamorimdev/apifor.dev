@@ -22,7 +22,7 @@ export default function Knowledge() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Memória <span style={{ color: "#697079", fontSize: 13 }}>(guia os agentes; injetada no plano)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>Memória <span style={{ color: "var(--mute)", fontSize: 13 }}>(guia os agentes; injetada no plano)</span></h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
         <select style={{ ...input, width: 120 }} value={f.scope} onChange={(e) => set("scope", e.target.value)}>
           <option value="global">global</option>
@@ -46,7 +46,7 @@ export default function Knowledge() {
                 <td style={cell}><span style={badge(m.scope === "global" ? "open" : "idle")}>{m.scope}{m.repo_id ? " " + short(m.repo_id, 10) : ""}</span></td>
                 <td style={cell}>{m.instruction}</td>
                 <td style={cell}>{m.source}</td>
-                <td style={cell}><a onClick={() => delMem(m.id)} style={{ color: "#F85149", cursor: "pointer", fontSize: 13 }}>excluir</a></td>
+                <td style={cell}><a onClick={() => delMem(m.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>excluir</a></td>
               </tr>
             ))}
             {!memories?.length && <tr><td style={cell} colSpan={4}>nenhuma memória</td></tr>}
@@ -54,8 +54,8 @@ export default function Knowledge() {
         </table>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Base de conhecimento (KB)</h3>
-      <div style={{ ...card, padding: "10px 16px", color: "#697079", fontSize: 13 }}>
+      <h3 style={{ color: "var(--dim)" }}>Base de conhecimento (KB)</h3>
+      <div style={{ ...card, padding: "10px 16px", color: "var(--mute)", fontSize: 13 }}>
         O <b>arquivo</b> da KB fica local (vault/store), importado via IPC
         (<code>executor kb-import &lt;nome&gt; &lt;categoria&gt;</code>). A lista abaixo é só metadado;
         o agente lê o conteúdo localmente no planejamento.

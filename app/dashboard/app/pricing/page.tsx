@@ -19,26 +19,26 @@ export default function Pricing() {
   }
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Planos <span style={{ color: "#697079", fontSize: 13 }}>(freemium — comece no Free, suba quando precisar)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>Planos <span style={{ color: "var(--mute)", fontSize: 13 }}>(freemium — comece no Free, suba quando precisar)</span></h3>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
         {PLANS.map((p) => (
-          <div key={p.key} style={{ ...card, padding: 18, border: p.highlight ? "1px solid #F5A623" : "1px solid #1E2228" }}>
+          <div key={p.key} style={{ ...card, padding: 18, border: p.highlight ? "1px solid var(--accent)" : "1px solid var(--border)" }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <h2 style={{ margin: 0, color: p.highlight ? "#F5A623" : "#E8EAED" }}>{p.name}</h2>
-              {p.highlight && <span style={{ fontSize: 11, color: "#0A0B0D", background: "#F5A623", borderRadius: 6, padding: "1px 6px" }}>popular</span>}
+              <h2 style={{ margin: 0, color: p.highlight ? "var(--accent)" : "var(--ink)" }}>{p.name}</h2>
+              {p.highlight && <span style={{ fontSize: 11, color: "var(--accent-ink)", background: "var(--accent)", borderRadius: 6, padding: "1px 6px" }}>popular</span>}
             </div>
-            <div style={{ color: "#E8EAED", fontSize: 22, margin: "8px 0 14px" }}>{p.price}</div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: "#9BA1A9", fontSize: 13, lineHeight: 1.9 }}>
+            <div style={{ color: "var(--ink)", fontSize: 22, margin: "8px 0 14px" }}>{p.price}</div>
+            <ul style={{ margin: 0, paddingLeft: 18, color: "var(--dim)", fontSize: 13, lineHeight: 1.9 }}>
               {p.feats.map((f) => <li key={f}>{f}</li>)}
             </ul>
-            <button style={{ ...btn, width: "100%", marginTop: 16, ...(p.highlight ? { background: "#F5A623", color: "#0A0B0D" } : {}) }}
+            <button style={{ ...btn, width: "100%", marginTop: 16, ...(p.highlight ? { background: "var(--accent)", color: "var(--accent-ink)" } : {}) }}
               onClick={() => assinar(p.key)} disabled={p.key === "free"}>
               {p.key === "free" ? "plano atual" : p.key === "enterprise" ? "falar com vendas" : "assinar " + p.name}
             </button>
           </div>
         ))}
       </div>
-      <p style={{ color: "#697079", fontSize: 13, marginTop: 16 }}>
+      <p style={{ color: "var(--mute)", fontSize: 13, marginTop: 16 }}>
         A cobrança é por assinatura (Stripe). O uso de IA roda <b>local com a sua chave</b> —
         a chave nunca vai ao cérebro. Cancele quando quiser; ao vencer, cai pro Free após a graça.
       </p>

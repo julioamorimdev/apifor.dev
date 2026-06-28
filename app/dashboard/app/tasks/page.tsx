@@ -36,7 +36,7 @@ export default function Tarefas() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Nova tarefa</h3>
+      <h3 style={{ color: "var(--dim)" }}>Nova tarefa</h3>
       <div style={{ ...card, padding: 16, display: "grid", gap: 10 }}>
         <input style={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="título" />
         <textarea style={{ ...input, minHeight: 64, resize: "vertical" }} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="pedido (prompt — vira o template do relay)" />
@@ -48,10 +48,10 @@ export default function Tarefas() {
           </select>
           <button style={btn} onClick={create}>Criar → planejar</button>
         </div>
-        <span style={{ color: "#697079", fontSize: 12 }}>Com repo: planeja → clona → coda → push → PR. Sem repo: só o plano.</span>
+        <span style={{ color: "var(--mute)", fontSize: 12 }}>Com repo: planeja → clona → coda → push → PR. Sem repo: só o plano.</span>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Tarefas</h3>
+      <h3 style={{ color: "var(--dim)" }}>Tarefas</h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>id</th><th style={cell}>título</th><th style={cell}>status</th><th style={cell}></th></tr></thead>
@@ -62,7 +62,7 @@ export default function Tarefas() {
                   <td style={cell}><code>{short(t.id)}</code></td>
                   <td style={cell}>{t.title}</td>
                   <td style={cell}><span style={badge(t.status)}>{t.status}</span></td>
-                  <td style={cell}><a onClick={() => toggle(t.id)} style={{ color: "#5BA9FF", cursor: "pointer", fontSize: 13 }}>{open === t.id ? "ocultar" : "plano"}</a></td>
+                  <td style={cell}><a onClick={() => toggle(t.id)} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13 }}>{open === t.id ? "ocultar" : "plano"}</a></td>
                 </tr>
                 {open === t.id && (
                   <tr>
@@ -71,7 +71,7 @@ export default function Tarefas() {
                         <ol style={{ margin: 0, paddingLeft: 20, color: "#C9CDD3" }}>
                           {steps.map((s) => <li key={s.idx}><span style={badge(s.type === "exec" ? "running" : s.type)}>{s.type}</span> {s.label}</li>)}
                         </ol>
-                      ) : <span style={{ color: "#697079" }}>sem plano ainda</span>}
+                      ) : <span style={{ color: "var(--mute)" }}>sem plano ainda</span>}
                     </td>
                   </tr>
                 )}

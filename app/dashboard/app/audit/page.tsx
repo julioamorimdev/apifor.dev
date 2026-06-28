@@ -22,7 +22,7 @@ export default function Auditoria() {
   return (
     <Page>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <h3 style={{ color: "#9BA1A9", margin: 0 }}>Auditoria <span style={{ color: "#697079", fontSize: 13 }}>(quem fez o quê — server-side)</span></h3>
+        <h3 style={{ color: "var(--dim)", margin: 0 }}>Auditoria <span style={{ color: "var(--mute)", fontSize: 13 }}>(quem fez o quê — server-side)</span></h3>
         <span style={{ flex: 1 }} />
         <button style={btn} onClick={exportCSV}>exportar CSV</button>
       </div>
@@ -42,7 +42,7 @@ export default function Auditoria() {
           </tbody>
         </table>
       </div>
-      <p style={{ color: "#697079", fontSize: 13 }}>
+      <p style={{ color: "var(--mute)", fontSize: 13 }}>
         Registra escritas sensíveis (criar tarefa/repo, trocar plano, adicionar membro,
         revogar device). Rate limit por plano (Free 60/min, Pro 300, Team 1000) e métricas
         Prometheus em <code>/metrics</code> completam o hardening do M6.1.
