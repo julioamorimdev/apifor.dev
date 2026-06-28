@@ -5,7 +5,8 @@ SHELL := /bin/bash
         subscription invoices checkout billing-demo \
         interventions approve reject pipeline-demo ci qa telemetry \
         members workspaces rbac-demo routines routines-demo \
-        memories kb-import knowledge-demo notifications
+        memories kb-import knowledge-demo notifications \
+        audit metrics hardening-demo
 
 dev: ; docker compose up --build
 
@@ -122,3 +123,8 @@ knowledge-demo: ; @bash scripts/knowledge-demo.sh               # memória injet
 
 # ── M5.4: notificações ──
 notifications: ; @curl -s http://localhost:8088/v1/notifications; echo   # lista + unread (eventos viram SSE)
+
+# ── M6.1: hardening (auditoria, rate limit, métricas) ──
+audit: ; @curl -s http://localhost:8088/v1/audit; echo            # trilha de auditoria
+metrics: ; @curl -s http://localhost:8088/metrics                 # métricas Prometheus
+hardening-demo: ; @bash scripts/hardening-demo.sh                 # auditoria + rate limit + /metrics

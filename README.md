@@ -79,6 +79,7 @@ Login demo: `demo@apifor.dev` / `demo`.
 - 🚧 **M5.2** — **rotinas**: trigger **schedule** (scheduler no cérebro dispara a cada N segundos) + **manual** (run via REST); a ação cria uma tarefa e roda o relay. enable/disable/delete; tela **Rotinas**. Validado e2e (schedule redispara, manual cria, disable para). `event` fica p/ depois.
 - 🚧 **M5.3** — **memória & KB**: memória da org (escopo **global/repo**) **injetada no prompt de planejamento**; KB importada via **IPC `kb.import`** (arquivo fica local, só o metadado vai ao cérebro) e **consultada pelo agente** no relay; `save_memory` na intervenção salva a decisão. Tela **Conhecimento**. Validado e2e (cérebro injeta a memória; executor confirma memória+KB no prompt).
 - 🚧 **M5.4** — **notificações (SSE)**: eventos do cérebro (PR aberto, revisão humana pendente, merge, falha, lease revogado, rotina disparada) viram `notification`; `GET /v1/notifications/stream` (SSE) empurra lista + não-lidas; tela **Notif** com badge no nav. Validado e2e. **M5 completo.**
+- 🚧 **M6.1** — **hardening**: **auditoria** (`audit_log` + export CSV), **rate limit por plano** (Free 60/min · Pro 300 · Team 1000 · ∞; 429 ao exceder), **observabilidade** (`/metrics` Prometheus: requests, 429, classes, gauges DB). Tela **Auditoria**. Validado e2e (16×429 em 70 req Free; CSV; métricas). Falta **M6.2** (cloud workers, SSO/SAML, enforcement de RLS, security review).
 
 ## Próximos passos
 

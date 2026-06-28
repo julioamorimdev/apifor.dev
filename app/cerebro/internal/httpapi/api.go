@@ -5,6 +5,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -36,11 +37,23 @@ type API struct {
 	StripePrices        map[string]string // plano -> price id
 	DunningGraceSec     int               // override da graça de 7d (p/ teste)
 	PublicURL           string            // base p/ success/cancel/return
+	// M6.1: observabilidade + rate limit
+	metrics *Metrics
+	rl      *RateLimiter
 }
 
 func (a *API) Routes() http.Handler {
+	if a.metrics == nil {
+		a.metrics = &Metrics{}
+	}
+	if a.rl == nil {
+		a.rl = newRateLimiter(a.DB)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", a.health)
+	mux.HandleFunc("/metrics", a.metricsHandler)               // observabilidade (Prometheus)
+	mux.HandleFunc("/v1/audit", a.auditList)                   // GET trilha de auditoria (manage)
+	mux.HandleFunc("/v1/audit/export", a.auditExport)          // GET export CSV (manage)
 	mux.HandleFunc("/v1/ca", a.caCert) // bootstrap público da CA (mTLS)
 	mux.HandleFunc("/v1/auth/login", a.login)
 	mux.HandleFunc("/v1/auth/register", a.register)
@@ -76,7 +89,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/notifications", a.notifications)         // GET lista, POST marca lidas
 	mux.HandleFunc("/v1/notifications/stream", a.notifStream)    // SSE de notificações
 	mux.HandleFunc("/v1/workers/stream", a.stream)        // SSE
-	return cors(mux)
+	return a.instrument(cors(mux))
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
@@ -177,6 +190,57 @@ func (a *API) requireCap(w http.ResponseWriter, r *http.Request, cap string) boo
 	return true
 }
 
+// recordAudit registra uma ação na trilha de auditoria (ator = usuário do token).
+func (a *API) recordAudit(r *http.Request, action, targetType, targetID string) {
+	uid, org, _ := a.authz(r)
+	a.DB.WriteAudit(r.Context(), org, "user", uid, action, targetType, targetID)
+}
+
+// metricsHandler — formato texto Prometheus.
+func (a *API) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	m := a.metrics
+	fmt.Fprintf(w, "apifor_http_requests_total %d\n", m.requests.Load())
+	fmt.Fprintf(w, "apifor_http_rate_limited_total %d\n", m.rateLimited.Load())
+	fmt.Fprintf(w, "apifor_http_responses_total{class=\"2xx\"} %d\n", m.status2xx.Load())
+	fmt.Fprintf(w, "apifor_http_responses_total{class=\"4xx\"} %d\n", m.status4xx.Load())
+	fmt.Fprintf(w, "apifor_http_responses_total{class=\"5xx\"} %d\n", m.status5xx.Load())
+	for k, v := range a.DB.GlobalCounts(r.Context()) {
+		fmt.Fprintf(w, "apifor_%s %d\n", k, v)
+	}
+}
+
+// auditList: GET trilha de auditoria (manage — sensível).
+func (a *API) auditList(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	rows, err := a.DB.ListAudit(r.Context(), a.orgFrom(r), 200)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// auditExport: GET export CSV da trilha de auditoria (manage).
+func (a *API) auditExport(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	rows, err := a.DB.ListAudit(r.Context(), a.orgFrom(r), 1000)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=audit.csv")
+	fmt.Fprintln(w, "when,actor_type,actor_id,action,target_type,target_id")
+	for _, x := range rows {
+		fmt.Fprintf(w, "%v,%v,%v,%v,%v,%v\n", x["when"], x["actor_type"], x["actor_id"], x["action"], x["target_type"], x["target_id"])
+	}
+}
+
 // me: org + papel do token atual.
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	uid, org, role := a.authz(r)
@@ -206,6 +270,7 @@ func (a *API) members(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
 		}
+		a.recordAudit(r, "member.add", "user", in.Email+" ("+in.Role+")")
 		writeJSON(w, 201, map[string]any{"user_id": id, "role": in.Role})
 		return
 	}
@@ -302,6 +367,7 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
+	a.recordAudit(r, "task.create", "task", taskID)
 	writeJSON(w, 201, map[string]any{"id": taskID, "dispatched": dispatched})
 }
 
@@ -400,6 +466,7 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
 		}
+		a.recordAudit(r, "repo.create", "repository", in.Name)
 		writeJSON(w, 201, map[string]any{"id": id})
 		return
 	}
@@ -760,6 +827,7 @@ func (a *API) deviceRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
+	a.recordAudit(r, "device.revoke", "device", id)
 	writeJSON(w, 200, map[string]any{"id": id, "revoked": true})
 }
 
@@ -783,6 +851,7 @@ func (a *API) setPlan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
+	a.recordAudit(r, "plan.change", "org", in.Plan)
 	writeJSON(w, 200, map[string]any{"plan": in.Plan})
 }
 
