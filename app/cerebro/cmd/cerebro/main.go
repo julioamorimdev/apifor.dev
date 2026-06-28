@@ -49,8 +49,21 @@ func main() {
 	if workerURL != "" {
 		log.Printf("RLS: runtime sem superuser — pool primário via role apifor_worker (BYPASSRLS)")
 	}
-	if err := database.SeedDemo(ctx); err != nil {
-		log.Fatalf("seed: %v", err)
+	// SEED_DEMO=false (produção): não cria o usuário/org demo. Os catálogos globais
+	// (plan_catalog/agent_profile) vêm da migration, então isto é seguro.
+	requireAuth := os.Getenv("REQUIRE_AUTH") == "true"
+	if os.Getenv("SEED_DEMO") != "false" {
+		if err := database.SeedDemo(ctx); err != nil {
+			log.Fatalf("seed: %v", err)
+		}
+		if requireAuth {
+			log.Printf("AVISO SEGURANÇA: credenciais demo ativas (SEED_DEMO) com REQUIRE_AUTH — desative SEED_DEMO em produção")
+		}
+	} else {
+		log.Printf("seed demo desativado (SEED_DEMO=false)")
+		if !requireAuth {
+			log.Printf("AVISO: SEED_DEMO=false sem REQUIRE_AUTH=true — o fallback demo do REST não funcionará")
+		}
 	}
 	log.Printf("db conectado + seed demo (login: %s / %s)", db.DemoEmail, db.DemoPass)
 
