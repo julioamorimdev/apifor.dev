@@ -231,8 +231,25 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   `GET /v1/notifications/stream` (SSE) empurra lista + não-lidas; `POST /v1/notifications`
   marca lidas. Tela **Notif** com badge de não-lidas no nav. Validado e2e.
 
-**M3, M4 e M5 completos.** Próximo: **M6** (hardening: cloud workers, SSO/SAML,
-auditoria, rate limits, RLS, security review) ou **M7** (empacotamento/launch).
+- **M6.1** — **hardening**: **auditoria** (audit_log: quem fez o quê, com export CSV),
+  **rate limit por plano** (Free 60/min · Pro 300 · Team 1000 · Enterprise ∞; 429 ao
+  exceder), **observabilidade** (`/metrics` Prometheus: requests, 429, classes, gauges).
+  Tela **Auditoria**. Validado e2e.
+
+**M3, M4 e M5 completos; M6 em curso.** Próximo: **M6.2** (cloud workers, SSO/SAML,
+enforcement de RLS, security review) ou **M7** (empacotamento/launch).
+
+## Hardening (M6.1)
+
+```bash
+make hardening-demo        # auditoria + rate limit + /metrics
+make audit                 # trilha de auditoria
+make metrics               # métricas Prometheus
+```
+
+`GET /v1/audit` (+ `/export` CSV; exige papel manage), `/metrics` (Prometheus).
+Rate limit por org/minuto conforme o plano. Escritas sensíveis (tarefa/repo/plano/
+membro/revogação) são auditadas com o ator do JWT.
 
 ## Notificações (M5.4)
 

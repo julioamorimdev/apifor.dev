@@ -84,6 +84,7 @@ const TABS = [
   ["/usage", "Uso"],
   ["/invoices", "Faturas"],
   ["/org", "Organização"],
+  ["/audit", "Auditoria"],
 ];
 
 export function Nav() {

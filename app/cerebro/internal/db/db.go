@@ -113,6 +113,68 @@ func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	return &u, err
 }
 
+// ── M6.1: auditoria + rate limit (plano) + métricas ──
+
+// WriteAudit registra uma ação no audit_log (quem fez o quê).
+func (d *DB) WriteAudit(ctx context.Context, orgID, actorType, actorID, action, targetType, targetID string) {
+	if actorType == "" {
+		actorType = "user"
+	}
+	_, _ = d.Pool.Exec(ctx, `INSERT INTO audit_log(id,org_id,actor_type,actor_id,action,target_type,target_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7)`, NewID("aud"), orgID, actorType, actorID, action, targetType, targetID)
+}
+
+func (d *DB) ListAudit(ctx context.Context, orgID string, limit int) ([]Row, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	rows, err := d.Pool.Query(ctx, `SELECT to_char(occurred_at,'YYYY-MM-DD HH24:MI:SS'),actor_type::text,COALESCE(actor_id,''),
+		action,COALESCE(target_type,''),COALESCE(target_id,'')
+		FROM audit_log WHERE org_id=$1 ORDER BY occurred_at DESC LIMIT $2`, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var when, at, aid, action, tt, tid string
+		if err := rows.Scan(&when, &at, &aid, &action, &tt, &tid); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"when": when, "actor_type": at, "actor_id": aid, "action": action, "target_type": tt, "target_id": tid})
+	}
+	return out, rows.Err()
+}
+
+// GetOrgPlan devolve o plano da org (p/ rate limit por plano).
+func (d *DB) GetOrgPlan(ctx context.Context, orgID string) string {
+	var p string
+	if err := d.Pool.QueryRow(ctx, `SELECT plan FROM org WHERE id=$1`, orgID).Scan(&p); err != nil {
+		return "free"
+	}
+	return p
+}
+
+// GlobalCounts — contadores globais p/ /metrics.
+func (d *DB) GlobalCounts(ctx context.Context) map[string]int64 {
+	out := map[string]int64{}
+	q := func(key, sql string) {
+		var n int64
+		if err := d.Pool.QueryRow(ctx, sql).Scan(&n); err == nil {
+			out[key] = n
+		}
+	}
+	q("orgs", `SELECT count(*) FROM org`)
+	q("users", `SELECT count(*) FROM app_user`)
+	q("tasks", `SELECT count(*) FROM task`)
+	q("tasks_merged", `SELECT count(*) FROM task WHERE status='merged'`)
+	q("tasks_failed", `SELECT count(*) FROM task WHERE status='failed'`)
+	q("leases_active", `SELECT count(*) FROM lease WHERE ended_at IS NULL`)
+	q("pull_requests", `SELECT count(*) FROM pull_request`)
+	q("devices_active", `SELECT count(*) FROM device WHERE revoked_at IS NULL`)
+	return out
+}
+
 // ── M5.4: notificações (eventos -> SSE) ──
 
 // CreateNotification registra uma notificação da org (alvo: o owner da org).
