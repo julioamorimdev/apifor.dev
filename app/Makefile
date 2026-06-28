@@ -19,6 +19,9 @@ prod-up: ; $(PROD) up -d --build
 prod-down: ; $(PROD) down -v
 prod-posture: ; @bash scripts/prod-posture.sh   # valida a postura endurecida
 
+# teste e2e do sistema inteiro (stack completa + pipeline real + subsistemas)
+full-test: ; @bash scripts/full-system-test.sh
+
 up: ; docker compose up -d --build
 
 down: ; docker compose down
