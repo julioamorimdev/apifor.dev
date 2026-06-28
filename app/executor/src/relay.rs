@@ -65,7 +65,11 @@ fn local_kb() -> String {
         for e in rd.flatten().take(10) {
             if let Ok(mut c) = std::fs::read_to_string(e.path()) {
                 c.truncate(2000);
-                out.push_str(&format!("\n----- KB: {} -----\n{}\n", e.file_name().to_string_lossy(), c));
+                out.push_str(&format!(
+                    "\n----- KB: {} -----\n{}\n",
+                    e.file_name().to_string_lossy(),
+                    c
+                ));
             }
         }
     }
@@ -185,7 +189,11 @@ async fn call_anthropic(key: &str, template: &str, context: &str) -> Result<Plan
         return Err(format!("HTTP {status}: {}", &txt[..txt.len().min(200)]));
     }
     let parsed: AnthropicResp = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
-    let json_text = parsed.content.iter().map(|b| b.text.as_str()).collect::<String>();
+    let json_text = parsed
+        .content
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect::<String>();
     let pj: PlanJson = serde_json::from_str(json_text.trim()).map_err(|e| e.to_string())?;
 
     let steps = pj
@@ -201,7 +209,11 @@ async fn call_anthropic(key: &str, template: &str, context: &str) -> Result<Plan
     Ok(PlanOut {
         steps,
         target_files: pj.target_files,
-        decision: if pj.decision.is_empty() { "plano gerado pela Anthropic (chave local)".into() } else { pj.decision },
+        decision: if pj.decision.is_empty() {
+            "plano gerado pela Anthropic (chave local)".into()
+        } else {
+            pj.decision
+        },
         tokens: parsed.usage.input_tokens + parsed.usage.output_tokens,
     })
 }
@@ -211,10 +223,26 @@ async fn call_anthropic(key: &str, template: &str, context: &str) -> Result<Plan
 fn stub(template: &str, found: &[String], reason: &str) -> PlanOut {
     let first = template.lines().next().unwrap_or("tarefa").trim();
     let steps = vec![
-        PlanStepOut { idx: 0, kind: 1, label: format!("Planejar: {first}") },
-        PlanStepOut { idx: 1, kind: 2, label: "Implementar a mudança nos arquivos de contexto".into() },
-        PlanStepOut { idx: 2, kind: 3, label: "Rodar a suíte de testes".into() },
-        PlanStepOut { idx: 3, kind: 4, label: "Revisar o diff antes do PR".into() },
+        PlanStepOut {
+            idx: 0,
+            kind: 1,
+            label: format!("Planejar: {first}"),
+        },
+        PlanStepOut {
+            idx: 1,
+            kind: 2,
+            label: "Implementar a mudança nos arquivos de contexto".into(),
+        },
+        PlanStepOut {
+            idx: 2,
+            kind: 3,
+            label: "Rodar a suíte de testes".into(),
+        },
+        PlanStepOut {
+            idx: 3,
+            kind: 4,
+            label: "Revisar o diff antes do PR".into(),
+        },
     ];
     PlanOut {
         steps,

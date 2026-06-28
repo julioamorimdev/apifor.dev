@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cerebro:
+    name: cérebro (Go build + vet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: app/cerebro/go.sum
+      - name: build + vet
+        working-directory: app/cerebro
+        run: |
+          go build ./...
+          go vet ./...
+
+  executor:
+    name: executor (Rust build + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: protoc (tonic-build)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/executor
+      - name: fmt + clippy + build
+        working-directory: app/executor
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo build
+
+  dashboard:
+    name: dashboard (Next build + export)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/dashboard/package-lock.json
+      - name: install + build + export
+        working-directory: app/dashboard
+        run: |
+          npm ci
+          npm run build
+          NEXT_EXPORT=1 NEXT_PUBLIC_API_BASE=https://api.apifor.dev npm run build
+
+  smoke:
+    name: smoke e2e (RLS + RBAC + privilégio)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ci-smoke (sobe o stack e valida)
+        working-directory: app
+        run: bash scripts/ci-smoke.sh

@@ -6,9 +6,12 @@ SHELL := /bin/bash
         interventions approve reject pipeline-demo ci qa telemetry \
         members workspaces rbac-demo routines routines-demo \
         memories kb-import knowledge-demo notifications \
-        audit metrics hardening-demo
+        audit metrics hardening-demo ci-smoke
 
 dev: ; docker compose up --build
+
+# checagens determinísticas do CI (e2e + RLS + RBAC + privilégio)
+ci-smoke: ; @bash scripts/ci-smoke.sh
 
 up: ; docker compose up -d --build
 
