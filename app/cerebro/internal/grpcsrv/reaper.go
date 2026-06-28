@@ -107,6 +107,15 @@ func (s *Server) RunReaper(ctx context.Context) {
 }
 
 func (s *Server) reapOnce(ctx context.Context) {
+	// dunning: assinaturas past_due cuja graça (7d) expirou → rebaixa p/ Free.
+	if orgs, err := s.DB.PastDueExpired(ctx); err == nil {
+		for _, org := range orgs {
+			if err := s.DB.DowngradeToFree(ctx, org); err == nil {
+				log.Printf("dunning: org=%s past_due expirou -> rebaixada p/ Free", org)
+			}
+		}
+	}
+
 	leases, err := s.DB.ActiveLeases(ctx)
 	if err != nil {
 		return

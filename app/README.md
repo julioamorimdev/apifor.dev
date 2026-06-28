@@ -97,8 +97,29 @@ CA; a **stream gRPC roda sobre mTLS** e é autenticada pelo **serial do cert** d
 
 Substitui o token-no-campo-cert do M1. Sem novos comandos: `make up` já sobe com mTLS.
 
-> Falta do M3 (**M3.2b**): **Stripe** (Checkout/Portal/webhooks + dunning) — depende de
-> chave externa. Graça de 5min e renovação de cert são parciais.
+## Billing & dunning (M3.2b)
+
+Checkout/Portal chamam a API do Stripe quando há `STRIPE_SECRET_KEY` (senão devolvem
+stub). O **webhook tem verificação de assinatura HMAC real** e aplica billing + dunning;
+o reaper rebaixa p/ Free quando a graça do `past_due` expira.
+
+```bash
+make billing-demo          # webhook assinado: checkout->Pro, fatura, past_due->dunning->Free
+make subscription          # estado da assinatura (plan/status/grace_until)
+make invoices              # faturas (vindas dos webhooks)
+make checkout PLAN=pro     # Stripe Checkout (stub sem STRIPE_SECRET_KEY)
+```
+
+Eventos tratados: `checkout.session.completed` (→ plano), `invoice.payment_failed`
+(→ `past_due` + graça 7d), `invoice.payment_succeeded` (→ `active` + fatura),
+`customer.subscription.deleted` (→ Free). REST: `POST /v1/billing/{checkout,portal,webhook}`,
+`GET /v1/subscription` `/v1/invoices`. Telas **Uso** (status da assinatura + Checkout) e
+**Faturas**. Knob `DUNNING_GRACE_SEC` encolhe os 7d p/ segundos.
+
+Env do Stripe (compose passthrough): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_PRO/TEAM`, `PUBLIC_URL`.
+
+> Parciais do M3: graça de 5min (offline) e renovação automática de cert.
 
 ## Estado
 - **M0** — fundação: serviços compilam e sobem, banco migrado.
@@ -121,6 +142,10 @@ Substitui o token-no-campo-cert do M1. Sem novos comandos: `make up` já sobe co
 - **M3.2a** — mTLS real (PKI): CA própria → Enroll assina CSR → cert de device →
   **stream gRPC sobre mTLS** autenticada pelo serial do cert; **revogar cert = kill-switch**.
   `GET /v1/ca` p/ bootstrap. Validado e2e (handshake, enroll, relay sobre mTLS, revogação).
+- **M3.2b** — billing & dunning: webhook do Stripe com **verificação de assinatura HMAC real**
+  (`checkout`/`invoice.*`/`subscription.deleted`); **dunning** (`past_due` → graça 7d →
+  reaper rebaixa p/ Free); Checkout/Portal (real com chave, senão stub). Telas **Uso**
+  (assinatura) + **Faturas**. Validado e2e com eventos sintéticos assinados.
 
-Próximo: **M3.2b** (Stripe + dunning) ou **M4** (gates do pipeline:
-plan/exec/test/review/merge, agent_profile, merge rules, intervenção).
+**M3 completo.** Próximo: **M4** (gates do pipeline: plan/exec/test/review/merge,
+agent_profile, merge rules, intervenção, reconciliação) ou hardening (M6).

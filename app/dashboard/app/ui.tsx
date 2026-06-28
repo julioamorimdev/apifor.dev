@@ -65,6 +65,7 @@ const TABS = [
   ["/config", "Configuração"],
   ["/prs", "PRs"],
   ["/usage", "Uso"],
+  ["/invoices", "Faturas"],
 ];
 
 export function Nav() {

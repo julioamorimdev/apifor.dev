@@ -49,6 +49,14 @@ services:
       REAPER_TICK_SEC: "${REAPER_TICK_SEC:-}"
       GRACE_SEC: "${GRACE_SEC:-}"
       CEREBRO_PKI_DIR: "/var/lib/cerebro"
+      # M3.2b billing (Stripe). Sem STRIPE_SECRET_KEY, checkout/portal viram stub;
+      # o webhook + dunning funcionam com STRIPE_WEBHOOK_SECRET (eventos sintéticos).
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_PRICE_PRO: "${STRIPE_PRICE_PRO:-}"
+      STRIPE_PRICE_TEAM: "${STRIPE_PRICE_TEAM:-}"
+      DUNNING_GRACE_SEC: "${DUNNING_GRACE_SEC:-}"
+      PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3000}"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:

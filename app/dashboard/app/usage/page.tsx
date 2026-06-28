@@ -11,31 +11,48 @@ type Usage = {
   lease_ttl_seconds: number;
 };
 type Device = { id: string; label: string; last_seen: string; status: string };
+type Sub = { plan: string; status: string; grace_until?: string };
 
 const fmtSec = (s: number) => (s >= 3600 ? (s / 3600).toFixed(1) + "h" : s + "s");
 const PLANS = ["free", "pro", "team", "enterprise"];
 
 export default function UsoTela() {
   const [u, setU] = useState<Usage | null>(null);
+  const [sub, setSub] = useState<Sub | null>(null);
+  const [checkout, setCheckout] = useState<string>("");
   const { data: devices, reload: reloadDev } = usePoll<Device[]>("/v1/devices", 2500);
 
-  const loadUsage = useCallback(() => { apiGet<Usage>("/v1/usage").then(setU).catch(() => {}); }, []);
+  const loadUsage = useCallback(() => {
+    apiGet<Usage>("/v1/usage").then(setU).catch(() => {});
+    apiGet<Sub>("/v1/subscription").then(setSub).catch(() => {});
+  }, []);
   useEffect(() => { loadUsage(); const t = setInterval(loadUsage, 2000); return () => clearInterval(t); }, [loadUsage]);
 
   async function setPlan(plan: string) { await apiPost("/v1/billing/plan", { plan }); loadUsage(); }
   async function revoke(id: string) { await apiPost(`/v1/devices/${id}/revoke`, {}); reloadDev(); loadUsage(); }
+  async function stripeCheckout(plan: string) {
+    const r = await apiPost<{ url: string; configured: boolean; note?: string }>("/v1/billing/checkout", { plan });
+    if (r.configured && r.url.startsWith("http")) window.open(r.url, "_blank");
+    else setCheckout(`${r.url}${r.note ? " — " + r.note : ""}`);
+  }
 
   return (
     <Page>
       <h3 style={{ color: "#9BA1A9" }}>Assinatura</h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ color: "#697079" }}>plano atual:</span>
+        <span style={{ color: "#697079" }}>plano:</span>
         <span style={badge(u?.plan === "free" ? "queued" : "open")}>{u?.plan || "—"}</span>
+        {sub && sub.status !== "none" && <span style={badge(sub.status === "active" ? "open" : sub.status === "past_due" ? "queued" : "failed")}>{sub.status}</span>}
+        {sub?.grace_until && <span style={{ color: "#F85149", fontSize: 12 }}>graça até {new Date(sub.grace_until).toLocaleString()}</span>}
         <span style={{ flex: 1 }} />
+        <button style={btn} onClick={() => stripeCheckout("pro")}>Assinar Pro (Stripe)</button>
         {PLANS.map((p) => (
-          <button key={p} style={{ ...btn, background: u?.plan === p ? "#3FB950" : "#F5A623" }} onClick={() => setPlan(p)}>{p}</button>
+          <button key={p} style={{ ...btn, background: u?.plan === p ? "#3FB950" : "#2A2D34", color: u?.plan === p ? "#0A0B0D" : "#9BA1A9" }} onClick={() => setPlan(p)}>{p}</button>
         ))}
-        <span style={{ color: "#697079", fontSize: 12, width: "100%" }}>troca de plano (stand-in do Stripe no M3.1) — tudo aplicado server-side</span>
+        <span style={{ color: "#697079", fontSize: 12, width: "100%" }}>
+          “Assinar Pro” usa Stripe Checkout (real com STRIPE_SECRET_KEY; senão stub). Os botões de plano são troca direta (dev). Tudo server-side.
+        </span>
+        {checkout && <code style={{ fontSize: 12, color: "#9BA1A9", width: "100%" }}>{checkout}</code>}
       </div>
 
       <h3 style={{ color: "#9BA1A9" }}>Uso vs limites</h3>

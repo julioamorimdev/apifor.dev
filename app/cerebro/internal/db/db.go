@@ -271,6 +271,123 @@ func jsonStr(s string) string {
 	return string(b)
 }
 
+// ── M3.2b: billing (Stripe) + dunning ──
+
+type Subscription struct {
+	Plan       string
+	Status     string
+	CustomerID string
+	SubID      string
+	GraceUntil *time.Time
+}
+
+func (d *DB) GetSubscription(ctx context.Context, orgID string) (*Subscription, error) {
+	var s Subscription
+	err := d.Pool.QueryRow(ctx, `SELECT plan,status,COALESCE(stripe_customer_id,''),COALESCE(stripe_subscription_id,''),grace_until
+		FROM subscription WHERE org_id=$1 ORDER BY created_at DESC LIMIT 1`, orgID).
+		Scan(&s.Plan, &s.Status, &s.CustomerID, &s.SubID, &s.GraceUntil)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &s, err
+}
+
+// UpsertSubscription aplica o plano da org + assinatura ativa (checkout concluído).
+func (d *DB) UpsertSubscription(ctx context.Context, orgID, plan, customerID, subID string) error {
+	if _, err := d.Pool.Exec(ctx, `UPDATE org SET plan=$2,updated_at=now() WHERE id=$1`, orgID, plan); err != nil {
+		return err
+	}
+	tag, err := d.Pool.Exec(ctx, `UPDATE subscription SET plan=$2,status='active',
+		stripe_customer_id=COALESCE(NULLIF($3,''),stripe_customer_id),
+		stripe_subscription_id=COALESCE(NULLIF($4,''),stripe_subscription_id),
+		grace_until=NULL,updated_at=now() WHERE org_id=$1`, orgID, plan, customerID, subID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		_, err = d.Pool.Exec(ctx, `INSERT INTO subscription(id,org_id,plan,status,seats,stripe_customer_id,stripe_subscription_id)
+			VALUES($1,$2,$3,'active',1,NULLIF($4,''),NULLIF($5,''))`, NewID("sub"), orgID, plan, customerID, subID)
+	}
+	return err
+}
+
+func (d *DB) OrgByStripeCustomer(ctx context.Context, customerID string) (string, error) {
+	if customerID == "" {
+		return "", nil
+	}
+	var org string
+	err := d.Pool.QueryRow(ctx, `SELECT org_id FROM subscription WHERE stripe_customer_id=$1 ORDER BY created_at DESC LIMIT 1`, customerID).Scan(&org)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return org, err
+}
+
+func (d *DB) SetSubscriptionPastDue(ctx context.Context, orgID string, graceUntil time.Time) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE subscription SET status='past_due',grace_until=$2,updated_at=now() WHERE org_id=$1`,
+		orgID, graceUntil)
+	return err
+}
+
+func (d *DB) SetSubscriptionActive(ctx context.Context, orgID string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE subscription SET status='active',grace_until=NULL,updated_at=now() WHERE org_id=$1`, orgID)
+	return err
+}
+
+// PastDueExpired: orgs em past_due cuja graça já passou → candidatas a rebaixar.
+func (d *DB) PastDueExpired(ctx context.Context) ([]string, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT org_id FROM subscription
+		WHERE status='past_due' AND grace_until IS NOT NULL AND grace_until < now()`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var o string
+		if err := rows.Scan(&o); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// DowngradeToFree rebaixa a org p/ Free e marca a assinatura cancelada (dunning).
+func (d *DB) DowngradeToFree(ctx context.Context, orgID string) error {
+	if _, err := d.Pool.Exec(ctx, `UPDATE org SET plan='free',updated_at=now() WHERE id=$1`, orgID); err != nil {
+		return err
+	}
+	_, err := d.Pool.Exec(ctx, `UPDATE subscription SET plan='free',status='canceled',grace_until=NULL,updated_at=now() WHERE org_id=$1`, orgID)
+	return err
+}
+
+func (d *DB) CreateInvoice(ctx context.Context, orgID, stripeInvoiceID string, amountCents int, currency, status, pdfURL string) error {
+	_, err := d.Pool.Exec(ctx, `INSERT INTO invoice(id,org_id,stripe_invoice_id,amount_cents,currency,status,pdf_url)
+		VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''))`, NewID("inv"), orgID, stripeInvoiceID, amountCents, currency, status, pdfURL)
+	return err
+}
+
+func (d *DB) ListInvoices(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT COALESCE(stripe_invoice_id,''),COALESCE(amount_cents,0),currency,COALESCE(status,''),
+		to_char(created_at,'YYYY-MM-DD'),COALESCE(pdf_url,'')
+		FROM invoice WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var sid, cur, st, date, pdf string
+		var amount int
+		if err := rows.Scan(&sid, &amount, &cur, &st, &date, &pdf); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"stripe_invoice_id": sid, "amount_cents": amount, "currency": cur, "status": st, "date": date, "pdf_url": pdf})
+	}
+	return out, rows.Err()
+}
+
 // ── M3.1: enforcement de plano (lease, worker-hours, kill-switch) — server-side ──
 
 type PlanLimits struct {

@@ -1,7 +1,8 @@
 SHELL := /bin/bash
 .PHONY: dev up down db migrate cerebro executor dashboard logs ps clean smoke \
         secret ipc-status task steps relay-demo git-remote repo prs pr-demo \
-        usage plan devices revoke enforce-demo
+        usage plan devices revoke enforce-demo \
+        subscription invoices checkout billing-demo
 
 dev: ; docker compose up --build
 
@@ -77,3 +78,12 @@ revoke: ; @curl -s -XPOST http://localhost:8088/v1/devices/$(DEV)/revoke; echo  
 
 # demo do enforcement (max_workers, lease TTL, kill-switch) com knobs de teste
 enforce-demo: ; @bash scripts/enforce-demo.sh
+
+# ── M3.2b: billing (Stripe) + dunning ──
+
+subscription: ; @curl -s http://localhost:8088/v1/subscription; echo          # estado da assinatura
+invoices: ; @curl -s http://localhost:8088/v1/invoices; echo                  # faturas
+checkout: ; @curl -s -XPOST http://localhost:8088/v1/billing/checkout -H 'content-type: application/json' -d '{"plan":"$(or $(PLAN),pro)"}'; echo  # Stripe Checkout (stub sem chave)
+
+# demo de billing + dunning com eventos sintéticos do Stripe ASSINADOS
+billing-demo: ; @bash scripts/billing-demo.sh

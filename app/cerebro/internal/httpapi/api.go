@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"apifor.dev/cerebro/gen/apiforv1"
 	"apifor.dev/cerebro/internal/auth"
+	"apifor.dev/cerebro/internal/billing"
 	"apifor.dev/cerebro/internal/db"
 )
 
@@ -27,6 +29,12 @@ type API struct {
 	// overrides de enforcement (espelham o reaper) p/ exibir cap/TTL efetivos em /v1/usage
 	HoursCapOverrideSec int
 	LeaseTTLOverrideSec int
+	// M3.2b: Stripe / dunning
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripePrices        map[string]string // plano -> price id
+	DunningGraceSec     int               // override da graça de 7d (p/ teste)
+	PublicURL           string            // base p/ success/cancel/return
 }
 
 func (a *API) Routes() http.Handler {
@@ -43,8 +51,13 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
 	mux.HandleFunc("/v1/devices", a.devices)       // GET lista devices
 	mux.HandleFunc("/v1/devices/", a.deviceRevoke) // POST /v1/devices/{id}/revoke (kill-switch)
-	mux.HandleFunc("/v1/billing/plan", a.setPlan)  // POST troca de plano (stand-in Stripe)
-	mux.HandleFunc("/v1/workers/stream", a.stream) // SSE
+	mux.HandleFunc("/v1/billing/plan", a.setPlan)         // POST troca de plano (dev)
+	mux.HandleFunc("/v1/billing/checkout", a.checkout)    // POST cria Checkout (Stripe)
+	mux.HandleFunc("/v1/billing/portal", a.portal)        // POST Customer Portal
+	mux.HandleFunc("/v1/billing/webhook", a.webhook)      // POST eventos do Stripe (assinados)
+	mux.HandleFunc("/v1/subscription", a.subscription)    // GET estado da assinatura
+	mux.HandleFunc("/v1/invoices", a.invoices)            // GET faturas
+	mux.HandleFunc("/v1/workers/stream", a.stream)        // SSE
 	return cors(mux)
 }
 
@@ -310,6 +323,148 @@ func (a *API) setPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"plan": in.Plan})
+}
+
+// ── M3.2b: billing ──
+
+// checkout: cria sessão de Checkout no Stripe (ou stub se não configurado).
+func (a *API) checkout(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Plan string }
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if in.Plan != "pro" && in.Plan != "team" {
+		writeJSON(w, 400, errBody("bad_request", "plano de checkout: pro|team"))
+		return
+	}
+	org := a.orgFrom(r)
+	if a.StripeSecretKey == "" {
+		writeJSON(w, 201, map[string]any{
+			"url": "stub://checkout?plan=" + in.Plan + "&org=" + org, "configured": false,
+			"note": "STRIPE_SECRET_KEY ausente — webhook sintético ou /v1/billing/plan",
+		})
+		return
+	}
+	url, err := billing.Checkout(a.StripeSecretKey, a.StripePrices[in.Plan],
+		a.PublicURL+"/usage", a.PublicURL+"/usage", org, in.Plan)
+	if err != nil {
+		writeJSON(w, 502, errBody("stripe", err.Error()))
+		return
+	}
+	writeJSON(w, 201, map[string]any{"url": url, "configured": true})
+}
+
+// portal: cria sessão do Customer Portal p/ gerenciar a assinatura.
+func (a *API) portal(w http.ResponseWriter, r *http.Request) {
+	org := a.orgFrom(r)
+	sub, _ := a.DB.GetSubscription(r.Context(), org)
+	if a.StripeSecretKey == "" || sub == nil {
+		writeJSON(w, 201, map[string]any{"url": "stub://portal?org=" + org, "configured": false})
+		return
+	}
+	url, err := billing.Portal(a.StripeSecretKey, sub.CustomerID, a.PublicURL+"/usage")
+	if err != nil {
+		writeJSON(w, 502, errBody("stripe", err.Error()))
+		return
+	}
+	writeJSON(w, 201, map[string]any{"url": url, "configured": true})
+}
+
+// webhook: recebe eventos do Stripe (assinatura HMAC verificada) e aplica billing+dunning.
+func (a *API) webhook(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	if err := billing.VerifyWebhook(body, r.Header.Get("Stripe-Signature"), a.StripeWebhookSecret, 5*time.Minute); err != nil {
+		writeJSON(w, 400, errBody("bad_signature", err.Error()))
+		return
+	}
+	var ev struct {
+		Type string `json:"type"`
+		Data struct {
+			Object struct {
+				ID                string            `json:"id"`
+				Customer          string            `json:"customer"`
+				Subscription      string            `json:"subscription"`
+				ClientReferenceID string            `json:"client_reference_id"`
+				AmountPaid        int               `json:"amount_paid"`
+				Currency          string            `json:"currency"`
+				HostedInvoiceURL  string            `json:"hosted_invoice_url"`
+				Metadata          map[string]string `json:"metadata"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &ev); err != nil {
+		writeJSON(w, 400, errBody("bad_request", "evento inválido"))
+		return
+	}
+	o := ev.Data.Object
+	org := o.Metadata["org_id"]
+	if org == "" {
+		org = o.ClientReferenceID
+	}
+	if org == "" {
+		org, _ = a.DB.OrgByStripeCustomer(r.Context(), o.Customer)
+	}
+	if org == "" {
+		writeJSON(w, 200, map[string]any{"received": true, "ignored": "sem org"})
+		return
+	}
+
+	ctx := r.Context()
+	switch ev.Type {
+	case "checkout.session.completed":
+		plan := o.Metadata["plan"]
+		if plan == "" {
+			plan = "pro"
+		}
+		_ = a.DB.UpsertSubscription(ctx, org, plan, o.Customer, o.Subscription)
+		log.Printf("billing: checkout completo org=%s plano=%s", org, plan)
+	case "invoice.payment_failed":
+		gsec := a.DunningGraceSec
+		if gsec <= 0 {
+			gsec = 7 * 24 * 3600
+		}
+		_ = a.DB.SetSubscriptionPastDue(ctx, org, time.Now().Add(time.Duration(gsec)*time.Second))
+		log.Printf("billing: pagamento falhou org=%s -> past_due (graça %ds)", org, gsec)
+	case "invoice.payment_succeeded":
+		_ = a.DB.SetSubscriptionActive(ctx, org)
+		_ = a.DB.CreateInvoice(ctx, org, o.ID, o.AmountPaid, defCur(o.Currency), "paid", o.HostedInvoiceURL)
+		log.Printf("billing: pagamento ok org=%s fatura=%s", org, o.ID)
+	case "customer.subscription.deleted":
+		_ = a.DB.DowngradeToFree(ctx, org)
+		log.Printf("billing: assinatura cancelada org=%s -> Free", org)
+	}
+	writeJSON(w, 200, map[string]any{"received": true, "type": ev.Type})
+}
+
+func (a *API) subscription(w http.ResponseWriter, r *http.Request) {
+	sub, err := a.DB.GetSubscription(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	if sub == nil {
+		writeJSON(w, 200, map[string]any{"plan": "free", "status": "none"})
+		return
+	}
+	out := map[string]any{"plan": sub.Plan, "status": sub.Status, "stripe_customer_id": sub.CustomerID}
+	if sub.GraceUntil != nil {
+		out["grace_until"] = sub.GraceUntil.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, 200, out)
+}
+
+func (a *API) invoices(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListInvoices(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func defCur(c string) string {
+	if c == "" {
+		return "usd"
+	}
+	return c
 }
 
 // SSE: empurra workers+tasks a cada 1s.

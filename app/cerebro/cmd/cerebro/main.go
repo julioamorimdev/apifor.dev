@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -80,6 +81,11 @@ func main() {
 		DB: database, Auth: a, Hub: hub, CACertPEM: ca.CertPEM,
 		HoursCapOverrideSec: srv.Cfg.HoursCapOverrideSec,
 		LeaseTTLOverrideSec: srv.Cfg.LeaseTTLOverrideSec,
+		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
+		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		StripePrices:        map[string]string{"pro": os.Getenv("STRIPE_PRICE_PRO"), "team": os.Getenv("STRIPE_PRICE_TEAM")},
+		DunningGraceSec:     atoiEnv("DUNNING_GRACE_SEC"),
+		PublicURL:           envOr("PUBLIC_URL", "http://localhost:3000"),
 	}
 	log.Printf("HTTP ouvindo em %s", httpAddr)
 	if err := http.ListenAndServe(httpAddr, api.Routes()); err != nil {
@@ -92,4 +98,11 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+func atoiEnv(k string) int {
+	if v, err := strconv.Atoi(os.Getenv(k)); err == nil {
+		return v
+	}
+	return 0
 }
