@@ -43,6 +43,24 @@ services:
       CEREBRO_GRPC: ":9090"
       DATABASE_URL: "postgres://postgres:pg@postgres/apifor?sslmode=disable"
       JWT_SECRET: "dev-secret"
+      # M3.1 enforcement — knobs de teste (encolhem 4h/36h p/ segundos). 0/ausente = produção.
+      LEASE_TTL_SEC: "${LEASE_TTL_SEC:-}"
+      WORKER_HOURS_CAP_SEC: "${WORKER_HOURS_CAP_SEC:-}"
+      REAPER_TICK_SEC: "${REAPER_TICK_SEC:-}"
+      GRACE_SEC: "${GRACE_SEC:-}"
+      CEREBRO_PKI_DIR: "/var/lib/cerebro"
+      # M3.2b billing (Stripe). Sem STRIPE_SECRET_KEY, checkout/portal viram stub;
+      # o webhook + dunning funcionam com STRIPE_WEBHOOK_SECRET (eventos sintéticos).
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_PRICE_PRO: "${STRIPE_PRICE_PRO:-}"
+      STRIPE_PRICE_TEAM: "${STRIPE_PRICE_TEAM:-}"
+      DUNNING_GRACE_SEC: "${DUNNING_GRACE_SEC:-}"
+      PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3000}"
+      # M4.1: gate de merge — exigir revisão humana (false = auto-merge)
+      MERGE_REQUIRE_HUMAN: "${MERGE_REQUIRE_HUMAN:-}"
+    volumes:
+      - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:
       migrate: { condition: service_completed_successfully }
     ports: ["8088:8080", "9090:9090"]
@@ -51,9 +69,25 @@ services:
     build: ./executor
     environment:
       CEREBRO_HTTP: "http://cerebro:8080"
-      CEREBRO_GRPC: "http://cerebro:9090"
+      CEREBRO_GRPC: "https://cerebro:9090"
+      APIFOR_HOME: "/var/lib/apifor"
+      APIFOR_WORKDIR: "/workspace"
+      # M3.1: pede N leases extras no boot p/ demonstrar a trava max_workers (0 = nenhum)
+      APIFOR_EXTRA_LEASES: "${APIFOR_EXTRA_LEASES:-0}"
+      # M4.1: step de teste — APIFOR_TEST_CMD roda comando real; APIFOR_TEST_FAIL=1 força falha
+      APIFOR_TEST_CMD: "${APIFOR_TEST_CMD:-}"
+      APIFOR_TEST_FAIL: "${APIFOR_TEST_FAIL:-}"
+      # chave Anthropic opcional: se ausente, o relay usa o stub determinístico.
+      # injete a real via IPC (make secret KEY=sk-...), nunca via env do cérebro.
+    volumes:
+      - vaultdata:/var/lib/apifor        # cofre local persistente
+      - ./sample:/workspace:ro           # refs de contexto (lidas LOCALMENTE)
+      - gitremotes:/remotes              # remote git local p/ a demo do M2.2
     depends_on:
       cerebro: { condition: service_started }
 
 volumes:
   pgdata:
+  vaultdata:
+  gitremotes:
+  cadata:

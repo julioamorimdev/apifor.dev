@@ -1,4 +1,4 @@
-FROM rust:1 AS build
+FROM rust:1-bookworm AS build
 RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml build.rs ./
@@ -7,6 +7,8 @@ COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates git && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /var/lib/apifor /workspace /remotes
+ENV APIFOR_HOME=/var/lib/apifor APIFOR_WORKDIR=/workspace
 COPY --from=build /src/target/release/executor /usr/local/bin/executor
 ENTRYPOINT ["executor"]
