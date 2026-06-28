@@ -65,6 +65,8 @@ services:
       MERGE_REQUIRE_HUMAN: "${MERGE_REQUIRE_HUMAN:-}"
       # M6.2: exige JWT (fecha o fallback dev "demo owner"). default off p/ as demos.
       REQUIRE_AUTH: "${REQUIRE_AUTH:-}"
+      # produção: SEED_DEMO=false não cria o usuário/org demo. default (vazio) = semeia.
+      SEED_DEMO: "${SEED_DEMO:-}"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:

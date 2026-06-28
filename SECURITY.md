@@ -47,7 +47,7 @@ A fronteira de privacidade é a invariante central:
 | **Enforcement de RLS (updates/deletes do REST)** | ✅ **Feito (M6.5)** — `SetPlan`/`RevokeDevice`/`RemoveMember`/`DeleteMemory`/`DeleteRoutine`/`SetRoutineEnabled`/`Approve`+`RejectHumanReview` rodam via `apifor_app` com contexto de org; o `USING` das policies bloqueia update/delete cross-tenant. Provado: contexto=B, `DELETE` de linha da org A → *DELETE 0*. | — |
 | **Runtime sem superuser** | ✅ **Feito (M6.5)** — o cérebro não conecta mais como `postgres`. Pool primário (pipeline + workers cross-org) usa **`apifor_worker`** (`NOSUPERUSER`, `BYPASSRLS`); só o `migrate` (DDL) usa `postgres`. | — |
 | **Pipeline writes (gRPC)** | `SaveExecResult`/`SetCIResult`/`MarkMerged`/`FailTask` seguem no pool `apifor_worker` (BYPASSRLS) — org derivada do **device autenticado por mTLS**, não de input do user. | Opcional: contexto de org explícito também no caminho gRPC. |
-| **Credenciais demo** | `demo@apifor.dev/demo` seedado; `JWT_SECRET` padrão fraco (aviso no boot). | Remover o seed demo e exigir `JWT_SECRET` forte em produção. |
+| **Credenciais demo** | ✅ **Gate** — `SEED_DEMO=false` não cria o usuário/org demo (catálogos vêm da migration; register segue OK). Avisa se demo+`REQUIRE_AUTH` convivem. `JWT_SECRET` padrão ainda avisa no boot. | Em produção: `SEED_DEMO=false` + `JWT_SECRET` forte. |
 | **`REQUIRE_AUTH`** | default **off** (demos funcionam sem token). | Ligar (`REQUIRE_AUTH=true`) em produção. |
 | **IPC** | ✅ **Feito** — Unix socket **0600** + **token de processo** (`ipc.token` 0600, gerado na 1ª subida); toda chamada exige o token (barra outros processos locais). A CLI lê o token do keystore; chamada sem/errado → rejeitada. | — |
 | **SSE + auth** | `EventSource` não envia header `Authorization`; streams ficam fora do gate. | Token via query/cookie httpOnly para streams. |
@@ -57,6 +57,6 @@ A fronteira de privacidade é a invariante central:
 ## Checklist de produção
 
 - [ ] `JWT_SECRET` forte (≥ 32 bytes aleatórios) · [ ] `REQUIRE_AUTH=true`
-- [ ] Remover seed `demo@apifor.dev` · [ ] `STRIPE_WEBHOOK_SECRET` configurado
+- [x] Seed demo gateável (`SEED_DEMO=false`) · [ ] `STRIPE_WEBHOOK_SECRET` configurado
 - [x] Enforcement de RLS (reads/creates/updates/deletes via `apifor_app`; runtime sem superuser) · [ ] CA/`vault.key` em KMS/secret store
 - [ ] TLS no HTTP REST (hoje só o gRPC é mTLS; o REST/SSE é texto) · [ ] mTLS bootstrap sem `GET /v1/ca` em claro
