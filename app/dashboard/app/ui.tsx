@@ -1,13 +1,11 @@
 "use client";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // ───────────────────────── tema (dark/light) ─────────────────────────
 export function useTheme(): [string, () => void] {
   const [theme, setTheme] = useState("dark");
-  useEffect(() => {
-    setTheme(document.documentElement.getAttribute("data-theme") || "dark");
-  }, []);
+  useEffect(() => { setTheme(document.documentElement.getAttribute("data-theme") || "dark"); }, []);
   const toggle = useCallback(() => {
     setTheme((cur) => {
       const next = cur === "dark" ? "light" : "dark";
@@ -19,15 +17,34 @@ export function useTheme(): [string, () => void] {
   return [theme, toggle];
 }
 
-// ───────────────────────── tokens de estilo (via CSS vars) ─────────────────────────
+// ───────────────────────── idioma (shell) ─────────────────────────
+const STR: Record<string, Record<string, string>> = {
+  pt: { search: "Buscar…", op: "Operação", sys: "Conhecimento & sistema", acct: "Conta & cobrança", wsp: "workspace", pool: "Pool ok", newWsp: "Novo workspace", noRes: "Nenhum resultado", cmdHint: "navegar" },
+  en: { search: "Search…", op: "Operations", sys: "Knowledge & system", acct: "Account & billing", wsp: "workspace", pool: "Pool ok", newWsp: "New workspace", noRes: "No results", cmdHint: "navigate" },
+};
+const EN_LABEL: Record<string, string> = {
+  "/": "Live", "/queue": "Queue", "/tasks": "Tasks", "/prs": "Pull Requests", "/interventions": "Intervention",
+  "/ci": "CI", "/qa": "QA", "/routines": "Routines", "/telemetry": "Telemetry", "/knowledge": "Knowledge",
+  "/config": "Settings", "/audit": "Audit", "/org": "Organization", "/usage": "Usage", "/invoices": "Invoices", "/pricing": "Plans",
+};
+export function useLang(): [string, (l: string) => void] {
+  const [lang, set] = useState("pt");
+  useEffect(() => { try { set(localStorage.getItem("apifor_lang") || "pt"); } catch {} }, []);
+  const setLang = useCallback((l: string) => { try { localStorage.setItem("apifor_lang", l); } catch {}; set(l); }, []);
+  return [lang, setLang];
+}
+const t = (lang: string, k: string) => (STR[lang] || STR.pt)[k] || STR.pt[k] || k;
+const navLabel = (lang: string, href: string, pt: string) => (lang === "en" ? EN_LABEL[href] || pt : pt);
+
+// ───────────────────────── tokens de estilo (CSS vars) ─────────────────────────
 const TONE: Record<string, [string, string]> = {
   merged: ["--green", "--green-tint"], open: ["--green", "--green-tint"], in_review: ["--accent", "--accent-tint"],
   running: ["--blue", "--blue-tint"], planning: ["--blue", "--blue-tint"], queued: ["--orange", "--orange-tint"],
   assigned: ["--orange", "--orange-tint"], idle: ["--dim", "--border"], failed: ["--red", "--red-tint"], blocked: ["--red", "--red-tint"],
 };
 export const badge = (s: string) => {
-  const [c, t] = TONE[s] || ["--dim", "--border"];
-  return { background: `var(${t})`, color: `var(${c})`, padding: "2px 8px", borderRadius: 6, fontSize: 12, whiteSpace: "nowrap" as const, fontWeight: 500 };
+  const [c, tt] = TONE[s] || ["--dim", "--border"];
+  return { background: `var(${tt})`, color: `var(${c})`, padding: "2px 8px", borderRadius: 6, fontSize: 12, whiteSpace: "nowrap" as const, fontWeight: 500 };
 };
 export const cell = { padding: "9px 14px", borderBottom: "1px solid var(--border)", textAlign: "left" as const, fontSize: 13.5 };
 export const tableStyle = { width: "100%", borderCollapse: "collapse" as const };
@@ -36,24 +53,14 @@ export const input = { background: "var(--bg)", color: "var(--ink)", border: "1p
 export const btn = { background: "var(--accent)", color: "var(--accent-ink)", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: "pointer", fontSize: 14 };
 export function short(id: string, n = 16) { return id.length > n ? id.slice(0, n) + "…" : id; }
 
-// ───────────────────────── navegação agrupada (mockups) ─────────────────────────
-type Item = [string, string, string?]; // [href, label, countKey?]
-const NAV: { title: string; items: Item[] }[] = [
-  { title: "Operação", items: [
-    ["/", "Live", "workers"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"],
-    ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"],
-    ["/ci", "CI"], ["/qa", "QA"], ["/rotinas-placeholder", "", undefined],
-    ["/routines", "Rotinas"], ["/telemetry", "Telemetria"],
-  ].filter((i) => i[1]) as Item[] },
-  { title: "Conhecimento & sistema", items: [
-    ["/knowledge", "Conhecimento"], ["/config", "Configuração"], ["/audit", "Auditoria"],
-  ] },
-  { title: "Conta & cobrança", items: [
-    ["/org", "Organização"], ["/usage", "Uso"], ["/invoices", "Faturas"], ["/pricing", "Planos"],
-  ] },
+// ───────────────────────── navegação agrupada ─────────────────────────
+type Item = [string, string, string?]; // [href, label_pt, countKey?]
+const NAV: { key: string; items: Item[] }[] = [
+  { key: "op", items: [["/", "Live", "workers"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"], ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"], ["/ci", "CI"], ["/qa", "QA"], ["/routines", "Rotinas"], ["/telemetry", "Telemetria"]] },
+  { key: "sys", items: [["/knowledge", "Conhecimento"], ["/config", "Configuração"], ["/audit", "Auditoria"]] },
+  { key: "acct", items: [["/org", "Organização"], ["/usage", "Uso"], ["/invoices", "Faturas"], ["/pricing", "Planos"]] },
 ];
 
-// contagens ao vivo p/ os badges da sidebar
 function useCounts() {
   const [c, setC] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -64,15 +71,14 @@ function useCounts() {
       };
       const [workers, queue, prs, interv] = await Promise.all([
         n("/v1/workers"),
-        n("/v1/tasks", (d) => d.filter((t) => ["queued", "planning", "assigned"].includes(t.status)).length),
-        n("/v1/prs", (d) => d.filter((p) => p.status !== "merged").length),
+        n("/v1/tasks", (d) => d.filter((x) => ["queued", "planning", "assigned"].includes(x.status)).length),
+        n("/v1/prs", (d) => d.filter((x) => x.status !== "merged").length),
         n("/v1/interventions"),
       ]);
       if (on) setC({ workers, queue, prs, interv });
     };
-    load();
-    const t = setInterval(load, 4000);
-    return () => { on = false; clearInterval(t); };
+    load(); const tm = setInterval(load, 4000);
+    return () => { on = false; clearInterval(tm); };
   }, []);
   return c;
 }
@@ -90,31 +96,115 @@ function useUnread() {
 const countBadge = (n?: number) =>
   n ? <span style={{ marginLeft: "auto", background: "var(--accent-tint)", color: "var(--accent)", borderRadius: 20, padding: "0 7px", fontSize: 11, fontWeight: 600 }}>{n}</span> : null;
 
+// ───────────────────────── command palette (⌘K) ─────────────────────────
+const ALL_ITEMS = NAV.flatMap((g) => g.items.map(([href, label]) => ({ href, label, group: g.key }))).concat([
+  { href: "/notifications", label: "Notificações", group: "op" },
+  { href: "/onboarding", label: "Início", group: "sys" },
+]);
+function CommandPalette() {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setOpen((o) => !o); }
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onOpen = () => setOpen(true);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("apifor-cmdk", onOpen as any);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("apifor-cmdk", onOpen as any); };
+  }, []);
+  useEffect(() => { if (open) { setQ(""); setSel(0); setTimeout(() => ref.current?.focus(), 30); } }, [open]);
+  if (!open) return null;
+  const matches = ALL_ITEMS.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
+  const go = (href: string) => { setOpen(false); window.location.href = href; };
+  return (
+    <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 100, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 560, maxWidth: "92vw", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,.5)", overflow: "hidden" }}>
+        <input ref={ref} value={q} placeholder="Ir para…"
+          onChange={(e) => { setQ(e.target.value); setSel(0); }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, matches.length - 1)); }
+            if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
+            if (e.key === "Enter" && matches[sel]) go(matches[sel].href);
+          }}
+          style={{ width: "100%", border: "none", borderBottom: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 16, padding: "16px 18px", outline: "none", fontFamily: "var(--sans)" }} />
+        <div style={{ maxHeight: 320, overflowY: "auto", padding: 6 }}>
+          {matches.map((m, i) => (
+            <div key={m.href} onMouseEnter={() => setSel(i)} onClick={() => go(m.href)}
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, cursor: "pointer", background: i === sel ? "var(--accent-tint)" : "transparent", color: i === sel ? "var(--accent)" : "var(--ink)" }}>
+              <span style={{ fontSize: 14 }}>{m.label}</span>
+              <code style={{ marginLeft: "auto", fontSize: 11, color: "var(--mute)" }}>{m.href}</code>
+            </div>
+          ))}
+          {!matches.length && <div style={{ padding: 16, color: "var(--mute)" }}>Nenhum resultado</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────────── workspace switcher ─────────────────────────
+function WorkspaceMenu({ lang }: { lang: string }) {
+  const [open, setOpen] = useState(false);
+  const [wsps, setWsps] = useState<{ id: string; name: string; initial: string }[]>([]);
+  const [role, setRole] = useState("");
+  const cur = wsps[0];
+  const load = useCallback(() => {
+    apiGet<{ data: any[] }>("/v1/workspaces").then((r) => setWsps(r?.data || [])).catch(() => {});
+    apiGet<{ role: string }>("/v1/me").then((r) => setRole(r?.role || "")).catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  async function novo() {
+    const name = prompt("Nome do novo workspace:");
+    if (name) { await apiPost("/v1/workspaces", { name }); load(); }
+  }
+  return (
+    <div style={{ position: "relative", margin: "0 12px 8px" }}>
+      <button className="apf-link" onClick={() => setOpen((o) => !o)}
+        style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--card)", cursor: "pointer", color: "var(--ink)", textAlign: "left" }}>
+        <span style={{ width: 22, height: 22, borderRadius: 6, background: "var(--accent)", color: "var(--accent-ink)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>{cur?.initial || "P"}</span>
+        <span style={{ fontSize: 13, lineHeight: 1.2 }}><b>{cur?.name || "Principal"}</b><br /><span style={{ color: "var(--mute)", fontSize: 11 }}>{t(lang, "wsp")}{role ? " · " + role : ""}</span></span>
+        <span style={{ marginLeft: "auto", color: "var(--mute)" }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, zIndex: 20, boxShadow: "0 10px 30px rgba(0,0,0,.4)" }}>
+          {wsps.map((w) => (
+            <a key={w.id} className="apf-link" href="/" onClick={() => { try { localStorage.setItem("apifor_wsp", w.id); } catch {} }}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, fontSize: 13 }}>
+              <span style={{ width: 18, height: 18, borderRadius: 5, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 10 }}>{w.initial}</span>
+              {w.name}
+            </a>
+          ))}
+          <div onClick={novo} className="apf-link" style={{ padding: "7px 9px", borderRadius: 8, fontSize: 13, color: "var(--accent)", cursor: "pointer", borderTop: "1px solid var(--border)", marginTop: 4 }}>+ {t(lang, "newWsp")}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Sidebar() {
   const path = usePathname();
   const counts = useCounts();
+  const [lang] = useLang();
   return (
     <aside style={{ width: 232, flexShrink: 0, background: "var(--sidebar)", borderRight: "1px solid var(--border)", height: "100vh", position: "sticky", top: 0, display: "flex", flexDirection: "column", overflowY: "auto" }}>
       <div style={{ padding: "18px 18px 10px" }}>
-        <div style={{ fontFamily: "var(--head)", fontWeight: 900, fontSize: 20, letterSpacing: "-.02em" }}>
-          apifor<span style={{ color: "var(--accent)" }}>DEV</span>
-        </div>
+        <div style={{ fontFamily: "var(--head)", fontWeight: 900, fontSize: 20, letterSpacing: "-.02em" }}>apifor<span style={{ color: "var(--accent)" }}>DEV</span></div>
       </div>
-      <a href="/onboarding" className="apf-link" style={{ margin: "0 12px 8px", padding: "8px 10px", borderRadius: 10, border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--card)" }}>
-        <span style={{ width: 22, height: 22, borderRadius: 6, background: "var(--accent)", color: "var(--accent-ink)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>P</span>
-        <span style={{ fontSize: 13 }}><b>Principal</b><br /><span style={{ color: "var(--mute)", fontSize: 11 }}>workspace · Início</span></span>
-      </a>
+      <WorkspaceMenu lang={lang} />
       <nav style={{ padding: "4px 8px", flex: 1 }}>
         {NAV.map((g) => (
-          <div key={g.title} style={{ marginBottom: 14 }}>
-            <div style={{ color: "var(--mute)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".06em", padding: "4px 10px" }}>{g.title}</div>
+          <div key={g.key} style={{ marginBottom: 14 }}>
+            <div style={{ color: "var(--mute)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".06em", padding: "4px 10px" }}>{t(lang, g.key)}</div>
             {g.items.map(([href, label, key]) => {
               const active = path === href;
               return (
                 <a key={href} href={href} className={active ? "" : "apf-link"}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, fontSize: 13.5,
-                    color: active ? "var(--accent-ink)" : "var(--dim)", background: active ? "var(--accent)" : "transparent", fontWeight: active ? 600 : 400 }}>
-                  {label}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, color: active ? "var(--accent-ink)" : "var(--dim)", background: active ? "var(--accent)" : "transparent", fontWeight: active ? 600 : 400 }}>
+                  {navLabel(lang, href, label)}
                   {countBadge((counts as any)[key || ""])}
                 </a>
               );
@@ -122,26 +212,48 @@ function Sidebar() {
           </div>
         ))}
       </nav>
-      <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", color: "var(--mute)", fontSize: 11 }}>
-        <span style={{ color: "var(--green)" }}>●</span> Pool ok · v0.9
+      <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", color: "var(--mute)", fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ color: counts.workers ? "var(--green)" : "var(--mute)" }}>●</span>
+        {t(lang, "pool")} · {counts.workers || 0} worker(s) · v0.9
       </div>
     </aside>
   );
 }
 
+function LangMenu({ lang, setLang }: { lang: string; setLang: (l: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ic = { width: 34, height: 34, borderRadius: 9, border: "1px solid var(--border)", background: "var(--card)", color: "var(--dim)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 12, fontWeight: 700 } as const;
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="apf-iconbtn" style={ic} onClick={() => setOpen((o) => !o)} title="Idioma">{lang.toUpperCase()}</button>
+      {open && (
+        <div style={{ position: "absolute", top: "110%", right: 0, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 5, zIndex: 20, boxShadow: "0 10px 30px rgba(0,0,0,.4)" }}>
+          {[["pt", "Português"], ["en", "English"]].map(([code, name]) => (
+            <div key={code} className="apf-link" onClick={() => { setLang(code); setOpen(false); }}
+              style={{ padding: "7px 12px", borderRadius: 7, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap", color: lang === code ? "var(--accent)" : "var(--ink)" }}>{name}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Topbar() {
   const [theme, toggle] = useTheme();
+  const [lang, setLang] = useLang();
   const unread = useUnread();
   const ic = { width: 34, height: 34, borderRadius: 9, border: "1px solid var(--border)", background: "var(--card)", color: "var(--dim)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 15 } as const;
+  const openCmd = () => window.dispatchEvent(new Event("apifor-cmdk"));
   return (
     <header style={{ height: 56, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, padding: "0 20px", position: "sticky", top: 0, background: "color-mix(in srgb, var(--bg) 86%, transparent)", backdropFilter: "blur(8px)", zIndex: 5 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, maxWidth: 420, color: "var(--mute)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 9, padding: "7px 11px", fontSize: 13 }}>
-        <span>🔍</span><span style={{ flex: 1 }}>Buscar…</span>
+      <button onClick={openCmd} className="apf-iconbtn" style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, maxWidth: 420, color: "var(--mute)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 9, padding: "7px 11px", fontSize: 13, cursor: "pointer", textAlign: "left" }}>
+        <span>🔍</span><span style={{ flex: 1 }}>{t(lang, "search")}</span>
         <kbd style={{ fontFamily: "var(--mono)", fontSize: 11, border: "1px solid var(--border)", borderRadius: 5, padding: "1px 5px" }}>⌘K</kbd>
-      </div>
+      </button>
       <span style={{ flex: 1 }} />
+      <LangMenu lang={lang} setLang={setLang} />
       <button className="apf-iconbtn" style={ic} onClick={toggle} title="Alternar tema">{theme === "dark" ? "☀️" : "🌙"}</button>
-      <a className="apf-iconbtn" href="/notifications" style={{ ...ic, position: "relative", textDecoration: "none" }} title="Notificações">
+      <a className="apf-iconbtn" href="/notifications" style={{ ...ic, position: "relative" }} title="Notificações">
         🔔
         {unread > 0 && <span style={{ position: "absolute", top: -4, right: -4, background: "var(--red)", color: "#fff", borderRadius: 10, minWidth: 16, height: 16, fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px", fontWeight: 700 }}>{unread}</span>}
       </a>
@@ -149,17 +261,16 @@ function Topbar() {
   );
 }
 
-// ───────────────────────── auth token (M5.1) ─────────────────────────
+// ───────────────────────── auth token ─────────────────────────
 const TOKEN_KEY = "apifor_token";
 export const getToken = () => (typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null);
-export const setToken = (t: string | null) => {
+export const setToken = (tk: string | null) => {
   if (typeof window === "undefined") return;
-  if (t) localStorage.setItem(TOKEN_KEY, t);
-  else localStorage.removeItem(TOKEN_KEY);
+  if (tk) localStorage.setItem(TOKEN_KEY, tk); else localStorage.removeItem(TOKEN_KEY);
 };
 function authHeaders(): Record<string, string> {
-  const t = getToken();
-  return t ? { Authorization: "Bearer " + t } : {};
+  const tk = getToken();
+  return tk ? { Authorization: "Bearer " + tk } : {};
 }
 
 // ───────────────────────── data fetching ─────────────────────────
@@ -186,11 +297,7 @@ export function usePoll<T = any>(path: string, ms = 2000) {
   const reload = useCallback(() => {
     apiGet<{ data: T }>(path).then((r) => setData((r as any).data ?? null)).catch(() => {});
   }, [path]);
-  useEffect(() => {
-    reload();
-    const t = setInterval(reload, ms);
-    return () => clearInterval(t);
-  }, [reload, ms]);
+  useEffect(() => { reload(); const tm = setInterval(reload, ms); return () => clearInterval(tm); }, [reload, ms]);
   return { data, reload };
 }
 
@@ -203,6 +310,7 @@ export function Page({ children }: { children: React.ReactNode }) {
         <Topbar />
         <main style={{ padding: "26px 32px", maxWidth: 1180, width: "100%" }}>{children}</main>
       </div>
+      <CommandPalette />
     </div>
   );
 }
