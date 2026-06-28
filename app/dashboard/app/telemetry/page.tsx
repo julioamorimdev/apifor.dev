@@ -1,43 +1,34 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Page, PageHead, apiGet, card } from "../ui";
+import { apiGet, Page, PageHead, StatCard, useSeries } from "../ui";
 
 type Tel = {
   tasks_total: number; tasks_merged: number; tasks_failed: number; tasks_active: number;
   tokens_used: number; pull_requests: number; week_worker_seconds: number;
 };
-
 const fmtH = (s: number) => (s >= 3600 ? (s / 3600).toFixed(1) + "h" : Math.round(s) + "s");
-
-function Metric({ label, value, color }: { label: string; value: string | number; color?: string }) {
-  return (
-    <div style={{ ...card, padding: 18, marginBottom: 0, minWidth: 140, flex: 1 }}>
-      <div style={{ color: "var(--mute)", fontSize: 13 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: color || "var(--ink)", marginTop: 4 }}>{value}</div>
-    </div>
-  );
-}
 
 export default function Telemetria() {
   const [t, setT] = useState<Tel | null>(null);
   useEffect(() => {
-    const load = () => apiGet<Tel>("/v1/telemetry").then(setT).catch(() => {});
-    load(); const i = setInterval(load, 2000); return () => clearInterval(i);
+    const load = () => apiGet<Tel>("/v1/telemetry").then((r) => { if (!(r as any)?.error) setT(r); }).catch(() => {});
+    load(); const i = setInterval(load, 3000); return () => clearInterval(i);
   }, []);
+
+  const sTot = useSeries(t?.tasks_total ?? 0), sMer = useSeries(t?.tasks_merged ?? 0), sFail = useSeries(t?.tasks_failed ?? 0);
+  const sAct = useSeries(t?.tasks_active ?? 0), sPr = useSeries(t?.pull_requests ?? 0), sTok = useSeries(t?.tokens_used ?? 0);
 
   return (
     <Page>
       <PageHead eyebrow="Operação" title="Telemetria" subtitle="Métricas agregadas da org." />
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <Metric label="Tarefas" value={t?.tasks_total ?? 0} />
-        <Metric label="Merged" value={t?.tasks_merged ?? 0} color="var(--green)" />
-        <Metric label="Falhas" value={t?.tasks_failed ?? 0} color="var(--red)" />
-        <Metric label="Ativas" value={t?.tasks_active ?? 0} color="var(--blue)" />
-      </div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <Metric label="Pull Requests" value={t?.pull_requests ?? 0} />
-        <Metric label="Tokens (relay/coder/review)" value={(t?.tokens_used ?? 0).toLocaleString()} color="var(--accent)" />
-        <Metric label="Worker-hours (semana)" value={fmtH(t?.week_worker_seconds ?? 0)} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14 }}>
+        <StatCard label="Tarefas" value={t?.tasks_total ?? 0} tone="accent" series={sTot} sub="total" />
+        <StatCard label="Merged" value={t?.tasks_merged ?? 0} tone="green" series={sMer} sub="concluídas" />
+        <StatCard label="Falhas" value={t?.tasks_failed ?? 0} tone="red" series={sFail} sub="gate vermelho" />
+        <StatCard label="Ativas" value={t?.tasks_active ?? 0} tone="blue" series={sAct} sub="em andamento" />
+        <StatCard label="Pull Requests" value={t?.pull_requests ?? 0} tone="orange" series={sPr} sub="abertos + merged" />
+        <StatCard label="Tokens" value={(t?.tokens_used ?? 0).toLocaleString()} tone="accent" series={sTok} sub="relay/coder/review" />
+        <StatCard label="Worker-hours" value={fmtH(t?.week_worker_seconds ?? 0)} tone="green" sub="na semana" />
       </div>
     </Page>
   );
