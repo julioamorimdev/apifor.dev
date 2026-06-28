@@ -27,7 +27,11 @@ func main() {
 	httpAddr := envOr("CEREBRO_ADDR", ":8080")
 	grpcAddr := envOr("CEREBRO_GRPC", ":9090")
 	dbURL := envOr("DATABASE_URL", "postgres://postgres:pg@postgres/apifor?sslmode=disable")
-	appURL := os.Getenv("APP_DATABASE_URL") // M6.3: pool com RLS (role não-superuser)
+	appURL := os.Getenv("APP_DATABASE_URL")       // M6.3: pool com RLS (role não-superuser)
+	workerURL := os.Getenv("WORKER_DATABASE_URL") // M6.5: pool primário sem superuser (BYPASSRLS)
+	if workerURL != "" {
+		dbURL = workerURL
+	}
 	secret := envOr("JWT_SECRET", "dev-secret-troque-em-prod")
 
 	// M6.2: aviso de segurança se o segredo do JWT for fraco/padrão.
@@ -40,7 +44,10 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 	if database.App != database.Pool {
-		log.Printf("RLS: reads do REST via role apifor_app (enforcement por org)")
+		log.Printf("RLS: reads/writes do REST via role apifor_app (enforcement por org)")
+	}
+	if workerURL != "" {
+		log.Printf("RLS: runtime sem superuser — pool primário via role apifor_worker (BYPASSRLS)")
 	}
 	if err := database.SeedDemo(ctx); err != nil {
 		log.Fatalf("seed: %v", err)

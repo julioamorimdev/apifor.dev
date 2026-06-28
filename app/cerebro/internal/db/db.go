@@ -245,8 +245,10 @@ func (d *DB) UnreadCount(ctx context.Context, orgID string) int {
 }
 
 func (d *DB) MarkNotificationsRead(ctx context.Context, orgID string) error {
-	_, err := d.Pool.Exec(ctx, `UPDATE notification SET read=true WHERE org_id=$1 AND NOT read`, orgID)
-	return err
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE notification SET read=true WHERE org_id=$1 AND NOT read`, orgID)
+		return e
+	})
 }
 
 // ── M5.3: memória (guia os agentes) + KB (metadado; arquivo local) ──
@@ -292,8 +294,10 @@ func (d *DB) MemoriesForTask(ctx context.Context, orgID, repoID string) ([]strin
 }
 
 func (d *DB) DeleteMemory(ctx context.Context, orgID, id string) error {
-	_, err := d.Pool.Exec(ctx, `DELETE FROM memory WHERE id=$1 AND org_id=$2`, id, orgID)
-	return err
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM memory WHERE id=$1 AND org_id=$2`, id, orgID)
+		return e
+	})
 }
 
 // PromptWithMemory prepende a memória da org (global + repo) ao pedido. Retorna (prompt, n).
@@ -414,23 +418,27 @@ func (d *DB) MarkRoutineRan(ctx context.Context, routineID string, intervalSec i
 }
 
 func (d *DB) SetRoutineEnabled(ctx context.Context, orgID, routineID string, enabled bool) error {
-	var next *time.Time
-	if enabled {
-		// reativa: agenda o próximo disparo com base no intervalo
-		var interval int
-		_ = d.Pool.QueryRow(ctx, `SELECT COALESCE((trigger_config->>'interval_sec')::int,0) FROM routine WHERE id=$1`, routineID).Scan(&interval)
-		if interval > 0 {
-			t := time.Now().Add(time.Duration(interval) * time.Second)
-			next = &t
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var next *time.Time
+		if enabled {
+			// reativa: agenda o próximo disparo com base no intervalo
+			var interval int
+			_ = tx.QueryRow(ctx, `SELECT COALESCE((trigger_config->>'interval_sec')::int,0) FROM routine WHERE id=$1`, routineID).Scan(&interval)
+			if interval > 0 {
+				t := time.Now().Add(time.Duration(interval) * time.Second)
+				next = &t
+			}
 		}
-	}
-	_, err := d.Pool.Exec(ctx, `UPDATE routine SET enabled=$3,next_run_at=$4,updated_at=now() WHERE id=$1 AND org_id=$2`, routineID, orgID, enabled, next)
-	return err
+		_, e := tx.Exec(ctx, `UPDATE routine SET enabled=$3,next_run_at=$4,updated_at=now() WHERE id=$1 AND org_id=$2`, routineID, orgID, enabled, next)
+		return e
+	})
 }
 
 func (d *DB) DeleteRoutine(ctx context.Context, orgID, routineID string) error {
-	_, err := d.Pool.Exec(ctx, `DELETE FROM routine WHERE id=$1 AND org_id=$2`, routineID, orgID)
-	return err
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM routine WHERE id=$1 AND org_id=$2`, routineID, orgID)
+		return e
+	})
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
@@ -495,8 +503,10 @@ func (d *DB) ListMembers(ctx context.Context, orgID string) ([]Row, error) {
 }
 
 func (d *DB) RemoveMember(ctx context.Context, orgID, membershipID string) error {
-	_, err := d.Pool.Exec(ctx, `DELETE FROM membership WHERE id=$1 AND org_id=$2 AND permission_tier<>'owner'`, membershipID, orgID)
-	return err
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM membership WHERE id=$1 AND org_id=$2 AND permission_tier<>'owner'`, membershipID, orgID)
+		return e
+	})
 }
 
 func (d *DB) CreateWorkspace(ctx context.Context, orgID, name string) (string, error) {
@@ -806,24 +816,33 @@ func (d *DB) MarkMerged(ctx context.Context, taskID, url string) error {
 }
 
 // ApproveHumanReview: humano aprova o gate; desbloqueia a tarefa (p/ seguir ao merge).
-func (d *DB) ApproveHumanReview(ctx context.Context, taskID string) error {
-	prID, _, err := d.prIDByTask(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if _, err := d.Pool.Exec(ctx, `UPDATE pull_request SET human_review_status='approved',updated_at=now() WHERE id=$1`, prID); err != nil {
-		return err
-	}
-	_, err = d.Pool.Exec(ctx, `UPDATE task SET status='running',blocked_reason=NULL,updated_at=now() WHERE id=$1`, taskID)
-	return err
+// ApproveHumanReview/RejectHumanReview via apifor_app (RLS): se a task/PR não for da
+// org corrente, os UPDATEs afetam 0 linhas — bloqueio cross-tenant (M6.5).
+func (d *DB) ApproveHumanReview(ctx context.Context, orgID, taskID string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var prID string
+		_ = tx.QueryRow(ctx, `SELECT id FROM pull_request WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1`, taskID).Scan(&prID)
+		if prID != "" {
+			if _, e := tx.Exec(ctx, `UPDATE pull_request SET human_review_status='approved',updated_at=now() WHERE id=$1`, prID); e != nil {
+				return e
+			}
+		}
+		_, e := tx.Exec(ctx, `UPDATE task SET status='running',blocked_reason=NULL,updated_at=now() WHERE id=$1`, taskID)
+		return e
+	})
 }
 
-// RejectHumanReview: humano reprova → tarefa falha.
-func (d *DB) RejectHumanReview(ctx context.Context, taskID, note string) error {
-	if prID, _, err := d.prIDByTask(ctx, taskID); err == nil {
-		_, _ = d.Pool.Exec(ctx, `UPDATE pull_request SET human_review_status='changes',updated_at=now() WHERE id=$1`, prID)
-	}
-	return d.FailTask(ctx, taskID, "revisão humana reprovou: "+note)
+func (d *DB) RejectHumanReview(ctx context.Context, orgID, taskID, note string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var prID string
+		_ = tx.QueryRow(ctx, `SELECT id FROM pull_request WHERE task_id=$1 ORDER BY created_at DESC LIMIT 1`, taskID).Scan(&prID)
+		if prID != "" {
+			_, _ = tx.Exec(ctx, `UPDATE pull_request SET human_review_status='changes',updated_at=now() WHERE id=$1`, prID)
+		}
+		_, e := tx.Exec(ctx, `UPDATE task SET status='failed',blocked_reason=$2,updated_at=now() WHERE id=$1`,
+			taskID, "revisão humana reprovou: "+note)
+		return e
+	})
 }
 
 // PipelineState — estado da tarefa + gates do PR, p/ a reconciliação no reconnect.
@@ -1138,9 +1157,11 @@ func (d *DB) OrgHasRevokedDevice(ctx context.Context, orgID string) (bool, error
 	return ok, err
 }
 
-func (d *DB) RevokeDevice(ctx context.Context, deviceID string) error {
-	_, err := d.Pool.Exec(ctx, `UPDATE device SET revoked_at=now() WHERE id=$1`, deviceID)
-	return err
+func (d *DB) RevokeDevice(ctx context.Context, orgID, deviceID string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE device SET revoked_at=now() WHERE id=$1 AND org_id=$2`, deviceID, orgID)
+		return e
+	})
 }
 
 func (d *DB) ListDevices(ctx context.Context, orgID string) ([]Row, error) {
@@ -1165,19 +1186,21 @@ func (d *DB) ListDevices(ctx context.Context, orgID string) ([]Row, error) {
 
 // SetPlan troca o plano da org e registra a assinatura (stand-in de Stripe no M3.1).
 func (d *DB) SetPlan(ctx context.Context, orgID, plan string) error {
-	if _, err := d.Pool.Exec(ctx, `UPDATE org SET plan=$2,updated_at=now() WHERE id=$1`, orgID, plan); err != nil {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE org SET plan=$2,updated_at=now() WHERE id=$1`, orgID, plan); err != nil {
+			return err
+		}
+		// upsert manual (subscription não tem UNIQUE(org_id))
+		tag, err := tx.Exec(ctx, `UPDATE subscription SET plan=$2,status='active',updated_at=now() WHERE org_id=$1`, orgID, plan)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			_, err = tx.Exec(ctx, `INSERT INTO subscription(id,org_id,plan,status,seats) VALUES($1,$2,$3,'active',1)`,
+				NewID("sub"), orgID, plan)
+		}
 		return err
-	}
-	// upsert manual (subscription não tem UNIQUE(org_id))
-	tag, err := d.Pool.Exec(ctx, `UPDATE subscription SET plan=$2,status='active',updated_at=now() WHERE org_id=$1`, orgID, plan)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		_, err = d.Pool.Exec(ctx, `INSERT INTO subscription(id,org_id,plan,status,seats) VALUES($1,$2,$3,'active',1)`,
-			NewID("sub"), orgID, plan)
-	}
-	return err
+	})
 }
 
 func (d *DB) SetTaskStatus(ctx context.Context, taskID, status string) error {
