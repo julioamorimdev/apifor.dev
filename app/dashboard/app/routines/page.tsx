@@ -27,7 +27,7 @@ export default function Rotinas() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Nova rotina</h3>
+      <h3 style={{ color: "var(--dim)" }}>Nova rotina</h3>
       <div style={{ ...card, padding: 16, display: "grid", gap: 10 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input style={{ ...input, flex: 1, minWidth: 140 }} placeholder="nome" value={f.name} onChange={(e) => set("name", e.target.value)} />
@@ -45,7 +45,7 @@ export default function Rotinas() {
         <button style={{ ...btn, width: 160 }} onClick={create}>Criar rotina</button>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Rotinas</h3>
+      <h3 style={{ color: "var(--dim)" }}>Rotinas</h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>nome</th><th style={cell}>trigger</th><th style={cell}>estado</th><th style={cell}>último</th><th style={cell}>ações</th></tr></thead>
@@ -57,9 +57,9 @@ export default function Rotinas() {
                 <td style={cell}><span style={badge(rt.enabled ? "open" : "idle")}>{rt.enabled ? "ativa" : "off"}</span></td>
                 <td style={cell}>{rt.last_run || "—"}</td>
                 <td style={cell}>
-                  <a onClick={() => act(rt.id, "run")} style={{ color: "#3FB950", cursor: "pointer", fontSize: 13, marginRight: 8 }}>run</a>
-                  <a onClick={() => act(rt.id, rt.enabled ? "disable" : "enable")} style={{ color: "#5BA9FF", cursor: "pointer", fontSize: 13, marginRight: 8 }}>{rt.enabled ? "pausar" : "ativar"}</a>
-                  <a onClick={() => del(rt.id)} style={{ color: "#F85149", cursor: "pointer", fontSize: 13 }}>excluir</a>
+                  <a onClick={() => act(rt.id, "run")} style={{ color: "var(--green)", cursor: "pointer", fontSize: 13, marginRight: 8 }}>run</a>
+                  <a onClick={() => act(rt.id, rt.enabled ? "disable" : "enable")} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13, marginRight: 8 }}>{rt.enabled ? "pausar" : "ativar"}</a>
+                  <a onClick={() => del(rt.id)} style={{ color: "var(--red)", cursor: "pointer", fontSize: 13 }}>excluir</a>
                 </td>
               </tr>
             ))}
@@ -67,7 +67,7 @@ export default function Rotinas() {
           </tbody>
         </table>
       </div>
-      <p style={{ color: "#697079", fontSize: 13 }}>
+      <p style={{ color: "var(--mute)", fontSize: 13 }}>
         <b>manual</b>: dispara com “run”. <b>schedule</b>: o cérebro dispara a cada N segundos
         (cria a tarefa e roda o relay). Tudo server-side.
       </p>

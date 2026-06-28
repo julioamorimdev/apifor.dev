@@ -18,7 +18,7 @@ export default function Notificacoes() {
   return (
     <Page>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <h3 style={{ color: "#9BA1A9", margin: 0 }}>Notificações <span style={{ color: "#697079", fontSize: 13 }}>(SSE — tempo real)</span></h3>
+        <h3 style={{ color: "var(--dim)", margin: 0 }}>Notificações <span style={{ color: "var(--mute)", fontSize: 13 }}>(SSE — tempo real)</span></h3>
         <span style={{ flex: 1 }} />
         <button style={btn} onClick={markRead}>marcar todas como lidas</button>
       </div>
@@ -29,10 +29,10 @@ export default function Notificacoes() {
             {items.map((n) => (
               <tr key={n.id} style={{ opacity: n.read ? 0.55 : 1 }}>
                 <td style={cell}><span style={badge(tone(n.type))}>{n.type}</span></td>
-                <td style={cell}>{n.link ? <a href={n.link} style={{ color: "#E8EAED" }}>{n.title}</a> : n.title}{!n.read && <span style={{ color: "#F85149", marginLeft: 6 }}>●</span>}</td>
+                <td style={cell}>{n.link ? <a href={n.link} style={{ color: "var(--ink)" }}>{n.title}</a> : n.title}{!n.read && <span style={{ color: "var(--red)", marginLeft: 6 }}>●</span>}</td>
                 <td style={cell}>{n.body}</td>
                 <td style={cell}>{n.date}</td>
-                <td style={cell}>{n.link && <a href={n.link} style={{ color: "#5BA9FF", fontSize: 13 }}>abrir</a>}</td>
+                <td style={cell}>{n.link && <a href={n.link} style={{ color: "var(--blue)", fontSize: 13 }}>abrir</a>}</td>
               </tr>
             ))}
             {!items.length && <tr><td style={cell} colSpan={5}>nenhuma notificação</td></tr>}

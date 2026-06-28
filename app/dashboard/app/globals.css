@@ -1,0 +1,69 @@
+/* Design tokens dos mockups (paginas/*.dc.html) — tema dark (default) + light. */
+:root {
+  --bg: #0A0B0D;
+  --card: #15171C;
+  --sidebar: #0E1014;
+  --elev: #1A1D23;
+  --accent: #F5A623;
+  --accent-ink: #1c1303;
+  --accent-tint: rgba(245, 166, 35, .14);
+  --ink: #E8EAED;
+  --dim: #9BA1A9;
+  --mute: #8B919A;
+  --border: rgba(255, 255, 255, .08);
+  --blue: #5BA9FF;
+  --green: #3FB950;
+  --orange: #F0883E;
+  --red: #F85149;
+  --blue-tint: rgba(91, 169, 255, .14);
+  --green-tint: rgba(63, 185, 80, .14);
+  --orange-tint: rgba(240, 136, 62, .15);
+  --red-tint: rgba(248, 81, 73, .14);
+  --sans: 'Geist', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --head: 'Montserrat', var(--sans);
+}
+
+:root[data-theme="light"] {
+  --bg: #F7F7F4;
+  --card: #FFFFFF;
+  --sidebar: #FFFFFF;
+  --elev: #F0EFEA;
+  --accent: #B5740F;
+  --accent-ink: #ffffff;
+  --accent-tint: rgba(181, 116, 15, .12);
+  --ink: #1c1303;
+  --dim: #5A616A;
+  --mute: #697079;
+  --border: rgba(0, 0, 0, .10);
+  --blue: #0969DA;
+  --green: #1A7F37;
+  --orange: #BC4C00;
+  --red: #CF222E;
+  --blue-tint: rgba(9, 105, 218, .10);
+  --green-tint: rgba(26, 127, 55, .12);
+  --orange-tint: rgba(188, 76, 0, .10);
+  --red-tint: rgba(207, 34, 46, .10);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+h1, h2, h3 { font-family: var(--head); font-weight: 800; letter-spacing: -.01em; }
+code, pre { font-family: var(--mono); }
+input, select, button, textarea { font-family: inherit; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.apf-link { transition: background .12s, color .12s; }
+.apf-link:hover { background: var(--elev); color: var(--ink); }
+.apf-iconbtn:hover { background: var(--elev); color: var(--ink); }

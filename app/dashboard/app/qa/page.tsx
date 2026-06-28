@@ -7,7 +7,7 @@ export default function QATela() {
   const { data: reports } = usePoll<QA[]>("/v1/qa", 2500);
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>QA <span style={{ color: "#697079", fontSize: 13 }}>(relatórios de teste)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>QA <span style={{ color: "var(--mute)", fontSize: 13 }}>(relatórios de teste)</span></h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>task</th><th style={cell}>status</th><th style={cell}>testes</th><th style={cell}>data</th></tr></thead>

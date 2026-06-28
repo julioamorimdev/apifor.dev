@@ -6,15 +6,15 @@ function Step({ n, title, children, done }: { n: number; title: string; children
   return (
     <div style={{ ...card, padding: 16, marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <span style={{ background: done ? "#2EA043" : "#1E2228", color: "#fff", borderRadius: 999, width: 24, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{done ? "✓" : n}</span>
-        <b style={{ color: "#E8EAED" }}>{title}</b>
+        <span style={{ background: done ? "var(--green)" : "var(--border)", color: "#fff", borderRadius: 999, width: 24, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{done ? "✓" : n}</span>
+        <b style={{ color: "var(--ink)" }}>{title}</b>
       </div>
-      <div style={{ color: "#9BA1A9", fontSize: 14, lineHeight: 1.7 }}>{children}</div>
+      <div style={{ color: "var(--dim)", fontSize: 14, lineHeight: 1.7 }}>{children}</div>
     </div>
   );
 }
 const Cmd = ({ children }: { children: React.ReactNode }) => (
-  <pre style={{ background: "#0A0B0D", border: "1px solid #1E2228", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: 13, color: "#C9D1D9" }}>{children}</pre>
+  <pre style={{ background: "var(--accent-ink)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: 13, color: "var(--ink)" }}>{children}</pre>
 );
 
 export default function Onboarding() {
@@ -28,10 +28,10 @@ export default function Onboarding() {
   }
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Bem-vindo ao apifor.dev <span style={{ color: "#697079", fontSize: 13 }}>(4 passos pra primeira tarefa)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>Bem-vindo ao apifor.dev <span style={{ color: "var(--mute)", fontSize: 13 }}>(4 passos pra primeira tarefa)</span></h3>
 
       <Step n={1} title="Crie sua conta" done={logged}>
-        {logged ? <span style={badge("merged")}>conectado</span> : <>Crie a org e entre em <a href="/login" style={{ color: "#5BA9FF" }}>/login</a>.</>}
+        {logged ? <span style={badge("merged")}>conectado</span> : <>Crie a org e entre em <a href="/login" style={{ color: "var(--blue)" }}>/login</a>.</>}
       </Step>
 
       <Step n={2} title="Deixe o executor rodando (na sua máquina/VM)">
@@ -57,9 +57,9 @@ sudo app/deploy/install.sh
         </div>
       </Step>
 
-      <div style={{ ...card, padding: 16, borderColor: "#F5A623" }}>
-        Pronto! Crie sua primeira tarefa na <a href="/queue" style={{ color: "#F5A623" }}>Fila</a> e acompanhe ao vivo no{" "}
-        <a href="/" style={{ color: "#F5A623" }}>Live</a>. Precisa de mais workers/horas? Veja <a href="/pricing" style={{ color: "#F5A623" }}>Planos</a>.
+      <div style={{ ...card, padding: 16, borderColor: "var(--accent)" }}>
+        Pronto! Crie sua primeira tarefa na <a href="/queue" style={{ color: "var(--accent)" }}>Fila</a> e acompanhe ao vivo no{" "}
+        <a href="/" style={{ color: "var(--accent)" }}>Live</a>. Precisa de mais workers/horas? Veja <a href="/pricing" style={{ color: "var(--accent)" }}>Planos</a>.
       </div>
     </Page>
   );

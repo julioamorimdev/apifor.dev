@@ -13,7 +13,7 @@ export default function PRs() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Pull Requests <span style={{ color: "#697079", fontSize: 13 }}>(gates: CI · revisão IA · revisão humana)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>Pull Requests <span style={{ color: "var(--mute)", fontSize: 13 }}>(gates: CI · revisão IA · revisão humana)</span></h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr>
@@ -31,8 +31,8 @@ export default function PRs() {
                 <td style={cell}><span style={gate(p.human_review_status)}>{p.human_review_status}</span></td>
                 <td style={cell}>
                   {p.url.startsWith("http")
-                    ? <a href={p.url} target="_blank" style={{ color: "#5BA9FF" }}>{short(p.url, 28)}</a>
-                    : <code style={{ fontSize: 12, color: "#9BA1A9" }}>{short(p.url, 36)}</code>}
+                    ? <a href={p.url} target="_blank" style={{ color: "var(--blue)" }}>{short(p.url, 28)}</a>
+                    : <code style={{ fontSize: 12, color: "var(--dim)" }}>{short(p.url, 36)}</code>}
                 </td>
               </tr>
             ))}

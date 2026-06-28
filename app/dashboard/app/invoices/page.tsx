@@ -10,7 +10,7 @@ export default function Faturas() {
 
   return (
     <Page>
-      <h3 style={{ color: "#9BA1A9" }}>Faturas <span style={{ color: "#697079", fontSize: 13 }}>(via webhooks do Stripe)</span></h3>
+      <h3 style={{ color: "var(--dim)" }}>Faturas <span style={{ color: "var(--mute)", fontSize: 13 }}>(via webhooks do Stripe)</span></h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>data</th><th style={cell}>valor</th><th style={cell}>status</th><th style={cell}>stripe id</th><th style={cell}>pdf</th></tr></thead>
@@ -21,7 +21,7 @@ export default function Faturas() {
                 <td style={cell}>{money(iv.amount_cents, iv.currency)}</td>
                 <td style={cell}><span style={badge(iv.status === "paid" ? "merged" : "queued")}>{iv.status}</span></td>
                 <td style={cell}><code style={{ fontSize: 12 }}>{iv.stripe_invoice_id || "—"}</code></td>
-                <td style={cell}>{iv.pdf_url ? <a href={iv.pdf_url} target="_blank" style={{ color: "#5BA9FF" }}>PDF</a> : "—"}</td>
+                <td style={cell}>{iv.pdf_url ? <a href={iv.pdf_url} target="_blank" style={{ color: "var(--blue)" }}>PDF</a> : "—"}</td>
               </tr>
             ))}
             {!invoices?.length && <tr><td style={cell} colSpan={5}>nenhuma fatura</td></tr>}

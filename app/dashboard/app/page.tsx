@@ -21,10 +21,10 @@ export default function Live() {
     <Page>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <span style={badge(live ? "running" : "failed")}>{live ? "● live (SSE)" : "○ offline"}</span>
-        <span style={{ color: "#697079", fontSize: 13 }}>estado em tempo real do cérebro</span>
+        <span style={{ color: "var(--mute)", fontSize: 13 }}>estado em tempo real do cérebro</span>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Workers</h3>
+      <h3 style={{ color: "var(--dim)" }}>Workers</h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>id</th><th style={cell}>source</th><th style={cell}>status</th><th style={cell}>step</th></tr></thead>
@@ -37,7 +37,7 @@ export default function Live() {
         </table>
       </div>
 
-      <h3 style={{ color: "#9BA1A9" }}>Tarefas</h3>
+      <h3 style={{ color: "var(--dim)" }}>Tarefas</h3>
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>id</th><th style={cell}>título</th><th style={cell}>status</th></tr></thead>
