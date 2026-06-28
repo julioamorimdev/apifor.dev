@@ -1,0 +1,13 @@
+{
+  "name": "apifor-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App desktop do apifor.dev (Tauri) — empacota a GUI + executor",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

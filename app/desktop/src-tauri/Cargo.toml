@@ -1,0 +1,19 @@
+[package]
+name = "apifor-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "App desktop do apifor.dev (Tauri v2)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# usado pelo Tauri em release p/ habilitar custom-protocol
+custom-protocol = ["tauri/custom-protocol"]

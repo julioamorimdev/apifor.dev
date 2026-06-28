@@ -1,43 +1,51 @@
-# apifor desktop (Tauri) — scaffold do M7
+# apifor desktop (Tauri v2)
 
-> ⚠️ **Scaffold** — precisa do toolchain Tauri v2 (Rust + webview + Node) e de
-> certificados de assinatura p/ gerar instaladores. **Não foi buildado/validado**
-> neste ambiente; é o ponto de partida do app desktop.
+App desktop que empacota a **GUI (dashboard Next, export estático)** + roda o
+**executor** como sidecar (serviço de fundo). Distribui instaladores Linux/Windows/macOS
+com auto-update.
 
-App desktop que empacota a **GUI (dashboard Next, exportado estático)** + roda o
-**executor** como serviço de fundo. Distribui instaladores Linux/Windows/macOS.
+> ⚠️ **Scaffold build-ready, não compilado neste ambiente** — requer o toolchain
+> Tauri v2 (Rust + webview), ícones em `src-tauri/icons/` e chaves de assinatura do
+> updater. O build real roda no host ou no CI (`.github/workflows/release.yml`).
 
-## Estrutura alvo
+## Estrutura (presente)
 
 ```
 desktop/
+  package.json                    # @tauri-apps/cli
   src-tauri/
-    tauri.conf.json     # janela, bundle, sidecar (executor), updater
-    Cargo.toml
-    src/main.rs         # abre a GUI; instala/inicia o serviço do executor
-    bin/                # binário do executor por alvo (sidecar)
-  (frontend = ../dashboard exportado: `next build && next export` -> out/)
+    tauri.conf.json               # janela, bundle, sidecar (externalBin), updater
+    Cargo.toml / build.rs
+    src/main.rs                   # abre a GUI + sobe o executor como sidecar
+    capabilities/default.json     # permissões (shell/updater)
+    bin/                          # (gerado no CI) apifor-executor-<target-triple>
+    icons/                        # (faltam) icon.png/.ico/.icns
 ```
 
-## Build (no host com Tauri)
+A GUI vem de `../dashboard` exportada (`NEXT_EXPORT=1 npm run build` → `out/`), com
+`NEXT_PUBLIC_API_BASE` apontando p/ o cérebro remoto.
+
+## Build local
 
 ```bash
-# 1. GUI estática
-cd ../dashboard && npm i && npm run build   # gere o export estático (out/)
-# 2. binário do executor por alvo -> desktop/src-tauri/bin/apifor-executor-<target-triple>
-cargo build --release --manifest-path ../executor/Cargo.toml
-# 3. instalador
-cd ../desktop && npm i -g @tauri-apps/cli && tauri build
-#    -> bundles em src-tauri/target/release/bundle/ (.deb/.AppImage/.msi/.dmg)
+cd app/dashboard && NEXT_EXPORT=1 NEXT_PUBLIC_API_BASE=https://api.apifor.dev npm run build
+cargo build --release --manifest-path app/executor/Cargo.toml
+cp app/executor/target/release/executor app/desktop/src-tauri/bin/apifor-executor-$(rustc -vV | sed -n 's/host: //p')
+cd app/desktop && npm install && npm run build   # -> src-tauri/target/release/bundle/
 ```
 
-## Serviço de fundo (sem desktop, ex.: VM Linux)
+## Release + auto-update (CI)
 
-Veja [`../deploy/`](../deploy): `sudo ./install.sh` builda o executor e registra o
-serviço (systemd no Linux, launchd no macOS). É o caminho "deixar rodando na VM".
+`git tag v0.1.0 && git push --tags` dispara `.github/workflows/release.yml`
+(tauri-action) que builda os 3 alvos, assina e publica os instaladores + o
+manifesto de update. Segredos: `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)`.
 
-## Pendências (M7)
+## Falta p/ GA
 
-- `tauri.conf.json` completo (sidecar + updater + ícones) e assinatura por plataforma.
-- Auto-update (endpoint de releases assinado).
-- Onboarding/preços já estão na GUI (telas `/onboarding` e `/pricing`).
+- Ícones por plataforma · chaves de assinatura/notarização (Apple/Windows).
+- Endpoint de releases (`releases.apifor.dev`) + `pubkey` real no `tauri.conf.json`.
+
+## Sem desktop (VM)
+
+[`../deploy/`](../deploy): `sudo ./install.sh` registra o executor como serviço
+(systemd/launchd) — o caminho "deixar rodando na VM".
