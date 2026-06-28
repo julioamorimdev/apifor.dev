@@ -62,6 +62,7 @@ const TABS = [
   ["/", "Live"],
   ["/queue", "Fila"],
   ["/tasks", "Tarefas"],
+  ["/routines", "Rotinas"],
   ["/config", "Configuração"],
   ["/prs", "PRs"],
   ["/ci", "CI"],

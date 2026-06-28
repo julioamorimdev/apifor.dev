@@ -56,6 +56,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/prs", a.prs)               // GET lista pull requests
 	mux.HandleFunc("/v1/interventions", a.interventions)       // GET gates aguardando humano
 	mux.HandleFunc("/v1/interventions/", a.interventionAnswer) // POST /{taskID}/answer
+	mux.HandleFunc("/v1/routines", a.routines)                 // GET lista, POST cria (write)
+	mux.HandleFunc("/v1/routines/", a.routineAction)           // POST /{id}/run|enable|disable, DELETE /{id}
 	mux.HandleFunc("/v1/ci", a.ci)                             // GET ci_runs
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
 	mux.HandleFunc("/v1/telemetry", a.telemetry)               // GET agregado
@@ -290,30 +292,35 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	if !a.requireCap(w, r, "write") {
 		return
 	}
-	org := a.orgFrom(r)
-	taskID, err := a.DB.CreateRealTask(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Title, in.Prompt, in.RepoID)
+	taskID, dispatched, err := a.createAndPlan(r.Context(), a.orgFrom(r), in.Title, in.Prompt, in.Refs, in.RepoID)
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
+	writeJSON(w, 201, map[string]any{"id": taskID, "dispatched": dispatched})
+}
 
-	// Dispara o relay: manda só a ESTRUTURA (template + refs), nunca código.
+// createAndPlan cria a tarefa e dispara o relay (template + refs; nunca código).
+// Reusado pelo POST /v1/tasks e pelo run manual de rotina.
+func (a *API) createAndPlan(ctx context.Context, org, title, prompt string, refs []string, repoID string) (string, bool, error) {
+	taskID, err := a.DB.CreateRealTask(ctx, org, a.DB.FirstWorkspace(ctx, org), title, prompt, repoID)
+	if err != nil {
+		return "", false, err
+	}
 	env := &apiforv1.Envelope{
 		Type: apiforv1.MsgType_REQUEST_PLAN,
 		Payload: &apiforv1.Envelope_RequestPlan{RequestPlan: &apiforv1.RequestPlan{
-			TaskId:         taskID,
-			PromptTemplate: in.Prompt,
-			ContextRefs:    in.Refs,
+			TaskId: taskID, PromptTemplate: prompt, ContextRefs: refs,
 		}},
 	}
 	dispatched := a.Hub.Send(org, env)
 	if dispatched {
-		_ = a.DB.SetTaskStatus(r.Context(), taskID, "planning")
-		log.Printf("relay disparado: task=%s refs=%v", taskID, in.Refs)
+		_ = a.DB.SetTaskStatus(ctx, taskID, "planning")
+		log.Printf("relay disparado: task=%s refs=%v", taskID, refs)
 	} else {
 		log.Printf("task %s criada mas nenhum executor conectado", taskID)
 	}
-	writeJSON(w, 201, map[string]any{"id": taskID, "dispatched": dispatched})
+	return taskID, dispatched, nil
 }
 
 // taskSteps: GET /v1/tasks/{id}/steps — plano estruturado já gravado.
@@ -444,6 +451,102 @@ func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"task_id": taskID, "decision": "reject"})
 	default:
 		writeJSON(w, 400, errBody("bad_request", "decision: approve|reject"))
+	}
+}
+
+// routines: GET lista; POST cria (write). Trigger schedule (interval_sec) ou manual.
+func (a *API) routines(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "write") {
+			return
+		}
+		var in struct {
+			Name        string   `json:"name"`
+			Trigger     string   `json:"trigger"`      // schedule|manual
+			IntervalSec int      `json:"interval_sec"` // p/ schedule
+			Title       string   `json:"title"`
+			Prompt      string   `json:"prompt"`
+			Refs        []string `json:"refs"`
+			RepoID      string   `json:"repo_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" || in.Prompt == "" {
+			writeJSON(w, 400, errBody("bad_request", "name e prompt obrigatórios"))
+			return
+		}
+		if in.Trigger == "" {
+			in.Trigger = "manual"
+		}
+		if in.Trigger == "schedule" && in.IntervalSec <= 0 {
+			writeJSON(w, 400, errBody("bad_request", "schedule exige interval_sec > 0"))
+			return
+		}
+		org := a.orgFrom(r)
+		title := in.Title
+		if title == "" {
+			title = in.Name
+		}
+		id, err := a.DB.CreateRoutine(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Name, in.Trigger, in.IntervalSec,
+			db.RoutineAction{Title: title, Prompt: in.Prompt, Refs: in.Refs, RepoID: in.RepoID})
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": id})
+		return
+	}
+	rows, err := a.DB.ListRoutines(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// routineAction: POST /v1/routines/{id}/{run|enable|disable}, DELETE /v1/routines/{id}.
+func (a *API) routineAction(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/routines/")
+	parts := strings.SplitN(rest, "/", 2)
+	id := parts[0]
+	if id == "" {
+		writeJSON(w, 404, errBody("not_found", "rota inválida"))
+		return
+	}
+	org := a.orgFrom(r)
+	if r.Method == http.MethodDelete {
+		if !a.requireCap(w, r, "write") {
+			return
+		}
+		_ = a.DB.DeleteRoutine(r.Context(), org, id)
+		writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
+		return
+	}
+	if r.Method != http.MethodPost || len(parts) < 2 {
+		writeJSON(w, 404, errBody("not_found", "use POST /v1/routines/{id}/{run|enable|disable}"))
+		return
+	}
+	if !a.requireCap(w, r, "write") {
+		return
+	}
+	switch parts[1] {
+	case "run":
+		o, wsp, act, err := a.DB.GetRoutineAction(r.Context(), id)
+		if err != nil {
+			writeJSON(w, 404, errBody("not_found", "rotina não encontrada"))
+			return
+		}
+		if wsp == "" {
+			wsp = a.DB.FirstWorkspace(r.Context(), o)
+		}
+		taskID, dispatched, _ := a.createAndPlan(r.Context(), o, act.Title, act.Prompt, act.Refs, act.RepoID)
+		writeJSON(w, 200, map[string]any{"task_id": taskID, "dispatched": dispatched})
+	case "enable":
+		_ = a.DB.SetRoutineEnabled(r.Context(), org, id, true)
+		writeJSON(w, 200, map[string]any{"id": id, "enabled": true})
+	case "disable":
+		_ = a.DB.SetRoutineEnabled(r.Context(), org, id, false)
+		writeJSON(w, 200, map[string]any{"id": id, "enabled": false})
+	default:
+		writeJSON(w, 404, errBody("not_found", "ação inválida"))
 	}
 }
 

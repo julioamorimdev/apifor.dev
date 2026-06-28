@@ -64,6 +64,8 @@ func main() {
 
 	// reaper de enforcement (lease TTL, worker-hours, kill-switch) — server-side
 	go srv.RunReaper(ctx)
+	// scheduler de rotinas (M5.2)
+	go srv.RunScheduler(ctx)
 
 	// gRPC (mTLS)
 	go func() {

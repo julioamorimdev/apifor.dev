@@ -216,8 +216,24 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   (org+role); tela **Organização** (login/registro, membros, workspaces). Validado e2e:
   viewer barrado em write/manage/billing; Org B não vê dados da Org A.
 
-**M3 e M4 completos; M5 em curso.** Próximo: **M5.2** (rotinas schedule/event/manual),
-**M5.3** (memória & KB), **M5.4** (notificações) ou hardening (M6).
+- **M5.2** — **rotinas**: trigger **schedule** (o cérebro dispara a cada N segundos) e
+  **manual** (run via REST); a ação cria uma tarefa e roda o relay. Scheduler em
+  background no cérebro; enable/disable/delete. Tela **Rotinas**. Validado e2e (schedule
+  redispara, manual cria, disable para). *event* fica anotado p/ depois.
+
+**M3 e M4 completos; M5 em curso.** Próximo: **M5.3** (memória & KB),
+**M5.4** (notificações) ou hardening (M6).
+
+## Rotinas (M5.2)
+
+```bash
+make routines-demo        # manual + schedule disparando sozinha + disable
+make routines             # lista rotinas
+```
+
+REST: `GET|POST /v1/routines`, `POST /v1/routines/{id}/{run|enable|disable}`,
+`DELETE /v1/routines/{id}`. Schedule usa `interval_sec`; o scheduler do cérebro
+(background) dispara as vencidas e reagenda. `trigger:"event"` ainda não implementado.
 
 ## Multi-tenant & RBAC (M5.1)
 

@@ -4,7 +4,7 @@ SHELL := /bin/bash
         usage plan devices revoke enforce-demo \
         subscription invoices checkout billing-demo \
         interventions approve reject pipeline-demo ci qa telemetry \
-        members workspaces rbac-demo
+        members workspaces rbac-demo routines routines-demo
 
 dev: ; docker compose up --build
 
@@ -108,3 +108,7 @@ telemetry: ; @curl -s http://localhost:8088/v1/telemetry; echo   # agregado da o
 members: ; @curl -s http://localhost:8088/v1/members; echo       # membros (demo org)
 workspaces: ; @curl -s http://localhost:8088/v1/workspaces; echo # workspaces (demo org)
 rbac-demo: ; @bash scripts/rbac-demo.sh                          # registro, papéis, isolamento por org
+
+# ── M5.2: rotinas (schedule/manual) ──
+routines: ; @curl -s http://localhost:8088/v1/routines; echo     # lista rotinas
+routines-demo: ; @bash scripts/routines-demo.sh                  # manual + schedule disparando sozinha

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,6 +112,121 @@ func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	}
 	return &u, err
 }
+
+// ── M5.2: rotinas (schedule/manual -> cria tarefa) ──
+
+// RoutineAction é o que a rotina dispara (espelha o POST /v1/tasks).
+type RoutineAction struct {
+	Title  string   `json:"title"`
+	Prompt string   `json:"prompt"`
+	Refs   []string `json:"refs"`
+	RepoID string   `json:"repo_id"`
+}
+
+func (d *DB) CreateRoutine(ctx context.Context, orgID, wspID, name, triggerType string, intervalSec int, action RoutineAction) (string, error) {
+	id := NewID("rtn")
+	actJSON, _ := json.Marshal(action)
+	trigJSON := `{"interval_sec":` + itoa(intervalSec) + `}`
+	var next *time.Time
+	if triggerType == "schedule" && intervalSec > 0 {
+		t := time.Now().Add(time.Duration(intervalSec) * time.Second)
+		next = &t
+	}
+	_, err := d.Pool.Exec(ctx, `INSERT INTO routine(id,org_id,workspace_id,name,trigger_type,trigger_config,action,enabled,next_run_at)
+		VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,true,$8)`, id, orgID, wspID, name, triggerType, trigJSON, string(actJSON), next)
+	return id, err
+}
+
+func (d *DB) ListRoutines(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,name,trigger_type::text,COALESCE((trigger_config->>'interval_sec')::int,0),
+		enabled,COALESCE(to_char(last_run_at,'YYYY-MM-DD HH24:MI:SS'),''),COALESCE(action->>'title','')
+		FROM routine WHERE org_id=$1 ORDER BY created_at`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, name, tt, last, title string
+		var interval int
+		var enabled bool
+		if err := rows.Scan(&id, &name, &tt, &interval, &enabled, &last, &title); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "name": name, "trigger": tt, "interval_sec": interval, "enabled": enabled, "last_run": last, "action_title": title})
+	}
+	return out, rows.Err()
+}
+
+// RoutineDue é uma rotina agendada vencida (pronta p/ disparar).
+type RoutineDue struct {
+	ID, OrgID, WspID string
+	IntervalSec      int
+	Action           RoutineAction
+}
+
+func (d *DB) DueRoutines(ctx context.Context) ([]RoutineDue, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,org_id,workspace_id,COALESCE((trigger_config->>'interval_sec')::int,0),action::text
+		FROM routine WHERE enabled AND trigger_type='schedule' AND next_run_at IS NOT NULL AND next_run_at <= now()`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RoutineDue
+	for rows.Next() {
+		var rd RoutineDue
+		var actStr string
+		if err := rows.Scan(&rd.ID, &rd.OrgID, &rd.WspID, &rd.IntervalSec, &actStr); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(actStr), &rd.Action)
+		out = append(out, rd)
+	}
+	return out, rows.Err()
+}
+
+// GetRoutineAction devolve org/wsp/ação de uma rotina (p/ run manual).
+func (d *DB) GetRoutineAction(ctx context.Context, routineID string) (string, string, RoutineAction, error) {
+	var org, wsp, actStr string
+	err := d.Pool.QueryRow(ctx, `SELECT org_id,workspace_id,action::text FROM routine WHERE id=$1`, routineID).Scan(&org, &wsp, &actStr)
+	var act RoutineAction
+	if err == nil {
+		_ = json.Unmarshal([]byte(actStr), &act)
+	}
+	return org, wsp, act, err
+}
+
+func (d *DB) MarkRoutineRan(ctx context.Context, routineID string, intervalSec int) error {
+	var next *time.Time
+	if intervalSec > 0 {
+		t := time.Now().Add(time.Duration(intervalSec) * time.Second)
+		next = &t
+	}
+	_, err := d.Pool.Exec(ctx, `UPDATE routine SET last_run_at=now(),next_run_at=$2,updated_at=now() WHERE id=$1`, routineID, next)
+	return err
+}
+
+func (d *DB) SetRoutineEnabled(ctx context.Context, orgID, routineID string, enabled bool) error {
+	var next *time.Time
+	if enabled {
+		// reativa: agenda o próximo disparo com base no intervalo
+		var interval int
+		_ = d.Pool.QueryRow(ctx, `SELECT COALESCE((trigger_config->>'interval_sec')::int,0) FROM routine WHERE id=$1`, routineID).Scan(&interval)
+		if interval > 0 {
+			t := time.Now().Add(time.Duration(interval) * time.Second)
+			next = &t
+		}
+	}
+	_, err := d.Pool.Exec(ctx, `UPDATE routine SET enabled=$3,next_run_at=$4,updated_at=now() WHERE id=$1 AND org_id=$2`, routineID, orgID, enabled, next)
+	return err
+}
+
+func (d *DB) DeleteRoutine(ctx context.Context, orgID, routineID string) error {
+	_, err := d.Pool.Exec(ctx, `DELETE FROM routine WHERE id=$1 AND org_id=$2`, routineID, orgID)
+	return err
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // ── M5.1: multi-tenant (org/workspace/membership) + RBAC ──
 
