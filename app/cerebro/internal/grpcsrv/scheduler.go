@@ -53,5 +53,6 @@ func (s *Server) fireRoutine(ctx context.Context, orgID, wspID string, a db.Rout
 	if s.Hub.Send(orgID, env) {
 		_ = s.DB.SetTaskStatus(ctx, taskID, "planning")
 	}
+	s.DB.CreateNotification(ctx, orgID, "routine", "Rotina disparada", a.Title, "/routines")
 	return taskID
 }

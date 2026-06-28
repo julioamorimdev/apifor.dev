@@ -113,6 +113,49 @@ func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	return &u, err
 }
 
+// ── M5.4: notificações (eventos -> SSE) ──
+
+// CreateNotification registra uma notificação da org (alvo: o owner da org).
+func (d *DB) CreateNotification(ctx context.Context, orgID, ntype, title, body, link string) {
+	var owner string
+	if err := d.Pool.QueryRow(ctx, `SELECT owner_user_id FROM org WHERE id=$1`, orgID).Scan(&owner); err != nil {
+		owner = DemoUserID
+	}
+	_, _ = d.Pool.Exec(ctx, `INSERT INTO notification(id,org_id,user_id,type,title,body,link,read)
+		VALUES($1,$2,$3,$4,$5,$6,$7,false)`, NewID("ntf"), orgID, owner, ntype, title, body, link)
+}
+
+func (d *DB) ListNotifications(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(type,''),COALESCE(title,''),COALESCE(body,''),COALESCE(link,''),read,
+		to_char(created_at,'YYYY-MM-DD HH24:MI:SS')
+		FROM notification WHERE org_id=$1 ORDER BY created_at DESC LIMIT 50`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, t, title, body, link, date string
+		var read bool
+		if err := rows.Scan(&id, &t, &title, &body, &link, &read, &date); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "type": t, "title": title, "body": body, "link": link, "read": read, "date": date})
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) UnreadCount(ctx context.Context, orgID string) int {
+	var n int
+	_ = d.Pool.QueryRow(ctx, `SELECT count(*) FROM notification WHERE org_id=$1 AND NOT read`, orgID).Scan(&n)
+	return n
+}
+
+func (d *DB) MarkNotificationsRead(ctx context.Context, orgID string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE notification SET read=true WHERE org_id=$1 AND NOT read`, orgID)
+	return err
+}
+
 // ── M5.3: memória (guia os agentes) + KB (metadado; arquivo local) ──
 
 func (d *DB) CreateMemory(ctx context.Context, orgID, wspID, scope, repoID, instruction, source string) (string, error) {

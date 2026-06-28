@@ -226,7 +226,23 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   metadado no cérebro) e **consultada pelo agente** no relay (lê a KB local). `save_memory`
   na intervenção salva a decisão como memória. Tela **Conhecimento**. Validado e2e.
 
-**M3 e M4 completos; M5 em curso.** Próximo: **M5.4** (notificações) ou hardening (M6).
+- **M5.4** — **notificações (SSE)**: eventos do cérebro (PR aberto, revisão humana
+  pendente, merge, falha, lease revogado, rotina disparada) viram `notification`;
+  `GET /v1/notifications/stream` (SSE) empurra lista + não-lidas; `POST /v1/notifications`
+  marca lidas. Tela **Notif** com badge de não-lidas no nav. Validado e2e.
+
+**M3, M4 e M5 completos.** Próximo: **M6** (hardening: cloud workers, SSO/SAML,
+auditoria, rate limits, RLS, security review) ou **M7** (empacotamento/launch).
+
+## Notificações (M5.4)
+
+```bash
+make notifications        # lista + contagem não-lidas
+```
+
+Eventos server-side → `notification` (alvo: owner da org). SSE em
+`GET /v1/notifications/stream` (lista + `unread`); `POST /v1/notifications` marca
+todas como lidas. O dashboard mostra o badge no nav e a tela **Notif** em tempo real.
 
 ## Memória & KB (M5.3)
 

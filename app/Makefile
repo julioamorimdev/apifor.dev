@@ -5,7 +5,7 @@ SHELL := /bin/bash
         subscription invoices checkout billing-demo \
         interventions approve reject pipeline-demo ci qa telemetry \
         members workspaces rbac-demo routines routines-demo \
-        memories kb-import knowledge-demo
+        memories kb-import knowledge-demo notifications
 
 dev: ; docker compose up --build
 
@@ -119,3 +119,6 @@ memories: ; @curl -s http://localhost:8088/v1/memories; echo     # lista memóri
 # importa um doc na KB local (valor em VALUE): make kb-import NAME=runbook.md CAT=runbook VALUE="..."
 kb-import: ; @docker compose exec -T -e VALUE="$(VALUE)" executor executor kb-import $(or $(NAME),doc.md) $(or $(CAT),doc)
 knowledge-demo: ; @bash scripts/knowledge-demo.sh               # memória injetada + KB via IPC
+
+# ── M5.4: notificações ──
+notifications: ; @curl -s http://localhost:8088/v1/notifications; echo   # lista + unread (eventos viram SSE)

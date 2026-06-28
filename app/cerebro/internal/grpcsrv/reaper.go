@@ -170,5 +170,6 @@ func (s *Server) revoke(ctx context.Context, l db.ActiveLease, reason string) {
 		Type:    apiforv1.MsgType_STOP_WORKER,
 		Payload: &apiforv1.Envelope_WorkerControl{WorkerControl: &apiforv1.WorkerControl{WorkerId: l.WorkerID, Stop: true, Reason: reason}},
 	})
+	s.DB.CreateNotification(ctx, l.OrgID, "lease", "Lease revogado", "motivo: "+reason, "/usage")
 	log.Printf("lease revogado: org=%s lease=%s worker=%s motivo=%s", l.OrgID, l.LeaseID, l.WorkerID, reason)
 }

@@ -73,6 +73,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/billing/webhook", a.webhook)      // POST eventos do Stripe (assinados)
 	mux.HandleFunc("/v1/subscription", a.subscription)    // GET estado da assinatura
 	mux.HandleFunc("/v1/invoices", a.invoices)            // GET faturas
+	mux.HandleFunc("/v1/notifications", a.notifications)         // GET lista, POST marca lidas
+	mux.HandleFunc("/v1/notifications/stream", a.notifStream)    // SSE de notificações
 	mux.HandleFunc("/v1/workers/stream", a.stream)        // SSE
 	return cors(mux)
 }
@@ -631,6 +633,7 @@ func (a *API) routineAction(w http.ResponseWriter, r *http.Request) {
 			wsp = a.DB.FirstWorkspace(r.Context(), o)
 		}
 		taskID, dispatched, _ := a.createAndPlan(r.Context(), o, act.Title, act.Prompt, act.Refs, act.RepoID)
+		a.DB.CreateNotification(r.Context(), o, "routine", "Rotina disparada", act.Title, "/routines")
 		writeJSON(w, 200, map[string]any{"task_id": taskID, "dispatched": dispatched})
 	case "enable":
 		_ = a.DB.SetRoutineEnabled(r.Context(), org, id, true)
@@ -929,6 +932,48 @@ func defCur(c string) string {
 		return "usd"
 	}
 	return c
+}
+
+// notifications: GET lista (+ unread); POST marca todas como lidas.
+func (a *API) notifications(w http.ResponseWriter, r *http.Request) {
+	org := a.orgFrom(r)
+	if r.Method == http.MethodPost {
+		_ = a.DB.MarkNotificationsRead(r.Context(), org)
+		writeJSON(w, 200, map[string]any{"read": true})
+		return
+	}
+	rows, err := a.DB.ListNotifications(r.Context(), org)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows, "unread": a.DB.UnreadCount(r.Context(), org)})
+}
+
+// notifStream: SSE — empurra notificações + contagem não-lidas a cada 2s.
+func (a *API) notifStream(w http.ResponseWriter, r *http.Request) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "sem streaming", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	org := a.orgFrom(r)
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			rows, _ := a.DB.ListNotifications(r.Context(), org)
+			b, _ := json.Marshal(map[string]any{"notifications": rows, "unread": a.DB.UnreadCount(r.Context(), org)})
+			_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
+			fl.Flush()
+		}
+	}
 }
 
 // SSE: empurra workers+tasks a cada 1s.

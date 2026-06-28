@@ -236,10 +236,12 @@ func (s *Server) dispatchStep(ctx context.Context, taskID string, kind apiforv1.
 
 // advancePipeline avança plan→exec→test→review→merge aplicando os gates server-side.
 func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResult) {
+	org := s.taskOrg(ctx, taskID)
 	switch r.Kind {
 	case "exec":
 		_ = s.DB.SaveExecResult(ctx, taskID, r.Branch, r.Url) // PR aberto
 		s.DB.RecordStepOutput(ctx, taskID, "exec", "done", "PR "+r.Branch)
+		s.DB.CreateNotification(ctx, org, "pr", "PR aberto", "branch "+r.Branch, "/prs")
 		log.Printf("pipeline: PR criado task=%s branch=%s -> test", taskID, r.Branch)
 		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST, "")
 	case "test":
@@ -252,6 +254,7 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 		} else {
 			s.DB.RecordStepOutput(ctx, taskID, "test", "failed", r.Summary)
 			_ = s.DB.FailTask(ctx, taskID, "gate: testes falharam")
+			s.DB.CreateNotification(ctx, org, "fail", "Tarefa falhou", "testes vermelhos", "/tasks")
 			log.Printf("pipeline: CI vermelho task=%s -> failed", taskID)
 		}
 	case "review":
@@ -259,12 +262,14 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 		s.DB.RecordStepOutput(ctx, taskID, "review", boolStatus(r.Approved), r.Comments)
 		if !r.Approved {
 			_ = s.DB.FailTask(ctx, taskID, "gate: revisão IA pediu mudanças")
+			s.DB.CreateNotification(ctx, org, "fail", "Tarefa falhou", "revisão IA pediu mudanças", "/tasks")
 			log.Printf("pipeline: review IA reprovou task=%s -> failed", taskID)
 			return
 		}
 		if s.MergeRequireHuman {
 			if ok, _ := s.DB.HumanApproved(ctx, taskID); !ok {
 				_ = s.DB.SetTaskBlocked(ctx, taskID, "human_review")
+				s.DB.CreateNotification(ctx, org, "intervention", "Revisão humana pendente", "uma tarefa aguarda aprovação", "/interventions")
 				log.Printf("pipeline: task=%s bloqueada aguardando revisão HUMANA (intervenção)", taskID)
 				return
 			}
@@ -273,8 +278,17 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 		s.dispatchStep(ctx, taskID, apiforv1.StepKind_MERGE, "")
 	case "merge":
 		_ = s.DB.MarkMerged(ctx, taskID, r.Url)
+		s.DB.CreateNotification(ctx, org, "merge", "Tarefa concluída", "merge realizado", "/prs")
 		log.Printf("pipeline: MERGED task=%s url=%s", taskID, r.Url)
 	}
+}
+
+// taskOrg resolve a org de uma tarefa (p/ notificações).
+func (s *Server) taskOrg(ctx context.Context, taskID string) string {
+	if tr, err := s.DB.GetTaskRepo(ctx, taskID); err == nil && tr != nil && tr.OrgID != "" {
+		return tr.OrgID
+	}
+	return db.DemoOrgID
 }
 
 func boolStatus(ok bool) string {

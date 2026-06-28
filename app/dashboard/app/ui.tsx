@@ -2,6 +2,16 @@
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+function useUnread() {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const es = new EventSource("/api/v1/notifications/stream");
+    es.onmessage = (e) => { try { setN(JSON.parse(e.data).unread || 0); } catch {} };
+    return () => es.close();
+  }, []);
+  return n;
+}
+
 // ── tema / estilos compartilhados ──
 export const COLORS: Record<string, string> = {
   merged: "#3FB950",
@@ -70,6 +80,7 @@ const TABS = [
   ["/interventions", "Intervenção"],
   ["/telemetry", "Telemetria"],
   ["/knowledge", "Conhecimento"],
+  ["/notifications", "Notif"],
   ["/usage", "Uso"],
   ["/invoices", "Faturas"],
   ["/org", "Organização"],
@@ -77,6 +88,7 @@ const TABS = [
 
 export function Nav() {
   const path = usePathname();
+  const unread = useUnread();
   return (
     <nav style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 28, flexWrap: "wrap" }}>
       <h1 style={{ color: "#F5A623", margin: "0 12px 0 0", fontSize: 22 }}>apiforDEV</h1>
@@ -97,6 +109,9 @@ export function Nav() {
             }}
           >
             {label}
+            {href === "/notifications" && unread > 0 && (
+              <span style={{ background: "#F85149", color: "#fff", borderRadius: 10, padding: "0 6px", fontSize: 11, marginLeft: 6 }}>{unread}</span>
+            )}
           </a>
         );
       })}
