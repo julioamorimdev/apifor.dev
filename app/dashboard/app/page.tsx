@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { badge, card, cell, Page, short, sseURL, tableStyle } from "./ui";
+import { badge, card, cell, Page, PageHead, short, sseURL, tableStyle } from "./ui";
 
 type Worker = { id: string; source: string; status: string; current_step: string };
 type Task = { id: string; title: string; status: string };
@@ -19,6 +19,7 @@ export default function Live() {
 
   return (
     <Page>
+      <PageHead eyebrow="Operação" title="Live" subtitle="Workers e tarefas em tempo real." />
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <span style={badge(live ? "running" : "failed")}>{live ? "● live (SSE)" : "○ offline"}</span>
         <span style={{ color: "var(--mute)", fontSize: 13 }}>estado em tempo real do cérebro</span>

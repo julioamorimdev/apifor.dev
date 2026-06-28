@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { apiPost, badge, btn, card, getToken, input, Page } from "../ui";
+import { Page, PageHead, apiPost, badge, btn, card, getToken, input } from "../ui";
 
 function Step({ n, title, children, done }: { n: number; title: string; children: React.ReactNode; done?: boolean }) {
   return (
@@ -28,8 +28,8 @@ export default function Onboarding() {
   }
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>Bem-vindo ao apifor.dev <span style={{ color: "var(--mute)", fontSize: 13 }}>(4 passos pra primeira tarefa)</span></h3>
 
+      <PageHead eyebrow="Início" title="Bem-vindo ao apifor.dev" subtitle="4 passos pra primeira tarefa." />
       <Step n={1} title="Crie sua conta" done={logged}>
         {logged ? <span style={badge("merged")}>conectado</span> : <>Crie a org e entre em <a href="/login" style={{ color: "var(--blue)" }}>/login</a>.</>}
       </Step>

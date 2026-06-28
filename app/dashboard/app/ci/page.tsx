@@ -1,5 +1,5 @@
 "use client";
-import { badge, card, cell, Page, short, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, badge, card, cell, short, tableStyle, usePoll } from "../ui";
 
 type CI = { id: string; provider: string; status: string; task_id: string; finished_at: string };
 
@@ -7,7 +7,7 @@ export default function CITela() {
   const { data: runs } = usePoll<CI[]>("/v1/ci", 2500);
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>CI <span style={{ color: "var(--mute)", fontSize: 13 }}>(execuções do step de teste)</span></h3>
+      <PageHead eyebrow="Operação" title="CI" subtitle="Execuções do step de teste." />
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>task</th><th style={cell}>provider</th><th style={cell}>status</th><th style={cell}>concluído</th></tr></thead>

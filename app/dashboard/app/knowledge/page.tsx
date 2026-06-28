@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { apiDelete, apiPost, badge, btn, card, cell, input, Page, short, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, apiDelete, apiPost, badge, btn, card, cell, input, short, tableStyle, usePoll } from "../ui";
 
 type Memory = { id: string; scope: string; repo_id: string; instruction: string; source: string };
 type KB = { id: string; name: string; category: string; file_ref: string; indexed: boolean };
@@ -22,6 +22,7 @@ export default function Knowledge() {
 
   return (
     <Page>
+      <PageHead eyebrow="Conhecimento & sistema" title="Conhecimento" subtitle="Memória e base de conhecimento." />
       <h3 style={{ color: "var(--dim)" }}>Memória <span style={{ color: "var(--mute)", fontSize: 13 }}>(guia os agentes; injetada no plano)</span></h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
         <select style={{ ...input, width: 120 }} value={f.scope} onChange={(e) => set("scope", e.target.value)}>
