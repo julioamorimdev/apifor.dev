@@ -170,6 +170,29 @@ export function PageHead({ eyebrow, title, subtitle, right }: { eyebrow?: string
   );
 }
 
+// modal reutilizável (overlay + fadein/rise + Esc/backdrop p/ fechar)
+export function Modal({ title, onClose, children, footer, width = 520 }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; width?: number }) {
+  const [lang] = useLang();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, [onClose]);
+  return (
+    <div className="apf-fadein" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div className="apf-rise" onClick={(e) => e.stopPropagation()} style={{ width, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "var(--shadow-pop)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, background: "var(--card)" }}>
+          <b style={{ fontFamily: "var(--head)", fontSize: 15 }}>{tr(lang, title)}</b>
+          <button className="apf-iconbtn" onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: "none", background: "transparent", color: "var(--dim)", cursor: "pointer", fontSize: 16 }}>✕</button>
+        </div>
+        <div style={{ padding: 18 }}>{children}</div>
+        {footer && <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 18px", borderTop: "1px solid var(--border)", position: "sticky", bottom: 0, background: "var(--card)" }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
 // cabeçalho dentro de um card
 export function CardHead({ title, right }: { title: string; right?: React.ReactNode }) {
   const [lang] = useLang();
