@@ -16,9 +16,20 @@ pub struct Instr {
     pub change_request: String,
     #[serde(default)]
     pub target_files: Vec<String>,
+    #[serde(default)]
+    pub model: String, // M4.2: modelo do agente desta etapa (coder/reviewer)
 }
 fn default_branch() -> String {
     "main".into()
+}
+
+const FALLBACK_MODEL: &str = "claude-opus-4-8";
+fn model_or(instr: &Instr) -> String {
+    if instr.model.is_empty() {
+        FALLBACK_MODEL.into()
+    } else {
+        instr.model.clone()
+    }
 }
 
 pub struct ExecResult {
@@ -83,7 +94,7 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
     // 4. agente coda (LOCAL): Anthropic com a chave do user, ou stub determinístico
     let summary = match vault.get("anthropic") {
         Some(key) => match code_with_llm(&key, &repo, &instr).await {
-            Ok(n) => format!("{n} arquivo(s) editado(s) pela Anthropic (chave local)"),
+            Ok(n) => format!("{n} arquivo(s) editado(s) pela Anthropic ({})", model_or(&instr)),
             Err(e) => {
                 eprintln!("exec: coder LLM falhou ({e}); usando stub");
                 stub_code(&repo, &instr)
@@ -165,7 +176,7 @@ pub async fn run_review(task_id: &str, instr_json: &str, vault: &Vault) -> Resul
         return Ok((false, "diff vazio — nada a revisar".into()));
     }
     match vault.get("anthropic") {
-        Some(key) => review_with_llm(&key, &instr.change_request, &diff).await,
+        Some(key) => review_with_llm(&key, &model_or(&instr), &instr.change_request, &diff).await,
         None => Ok((true, "stub: revisão aprovada (sem chave anthropic)".into())),
     }
 }
@@ -178,7 +189,8 @@ struct ReviewJson {
     comments: String,
 }
 
-async fn review_with_llm(key: &str, change: &str, diff: &str) -> Result<(bool, String), String> {
+async fn review_with_llm(key: &str, model: &str, change: &str, diff: &str) -> Result<(bool, String), String> {
+    println!("reviewer: usando modelo {model}");
     let capped: String = diff.chars().take(12000).collect();
     let system = "Você é um revisor de código sênior. Avalie o diff frente ao pedido e \
         responda em JSON {\"approved\":bool,\"comments\":string}. Aprove se a mudança é \
@@ -189,7 +201,7 @@ async fn review_with_llm(key: &str, change: &str, diff: &str) -> Result<(bool, S
         "properties":{"approved":{"type":"boolean"},"comments":{"type":"string"}}
     });
     let body = serde_json::json!({
-        "model":"claude-opus-4-8","max_tokens":1000,"system":system,
+        "model":model,"max_tokens":1000,"system":system,
         "output_config":{"format":{"type":"json_schema","schema":schema}},
         "messages":[{"role":"user","content":user}]
     });
@@ -279,6 +291,8 @@ async fn code_with_llm(key: &str, repo: &Path, instr: &Instr) -> Result<usize, S
         dos arquivos-alvo. Devolva o conteúdo NOVO COMPLETO de cada arquivo que precisa mudar, \
         em JSON {\"files\":[{\"path\":...,\"content\":...}]}. Edite o mínimo necessário.";
     let user = format!("PEDIDO:\n{}\n\nARQUIVOS:\n{ctx}", instr.change_request);
+    let model = model_or(instr);
+    println!("coder: usando modelo {model}");
     let schema = serde_json::json!({
         "type":"object","additionalProperties":false,"required":["files"],
         "properties":{"files":{"type":"array","items":{
@@ -286,7 +300,7 @@ async fn code_with_llm(key: &str, repo: &Path, instr: &Instr) -> Result<usize, S
             "properties":{"path":{"type":"string"},"content":{"type":"string"}}}}}
     });
     let body = serde_json::json!({
-        "model":"claude-opus-4-8","max_tokens":4000,"system":system,
+        "model":model,"max_tokens":4000,"system":system,
         "output_config":{"format":{"type":"json_schema","schema":schema}},
         "messages":[{"role":"user","content":user}]
     });

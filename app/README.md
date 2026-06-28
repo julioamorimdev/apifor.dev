@@ -141,8 +141,21 @@ integra o branch na base e dá push. Gate humano: `MERGE_REQUIRE_HUMAN=false` = 
 REST: `GET /v1/interventions`, `POST /v1/interventions/{task}/answer`; PRs expõem
 `ci_status`/`ai_review_status`/`human_review_status`. Telas **Intervenção** + **PRs** (gates).
 
-> Parciais do M4 (→ **M4.2**): `agent_profile` (modelo por agente), reconciliação
-> (`TaskStateSnapshot` no reconnect), telas CI/QA/Logs/Telemetria.
+### M4.2 — agente por modelo, identidade estável, reconciliação
+
+- **agent_profile** (modelo por agente): `coder`/`qa`/`reviewer` seedados com modelo
+  próprio (opus/haiku/sonnet); o cérebro injeta o modelo da etapa nas instruções e o
+  executor usa esse modelo (coder no exec, reviewer no review).
+- **Identidade de device estável**: o executor persiste cert+chave e **reconecta como o
+  mesmo device** (cert revogado → re-enroll no próximo start). Habilita reconexão real.
+- **Reconciliação** (`TaskStateSnapshot` no reconnect): ao religar, o executor reporta as
+  tarefas com workdir local; o cérebro **retoma o próximo step pendente** — ex.: um merge
+  aprovado enquanto o executor estava offline é despachado de novo e concluído.
+- **Timeline/Logs**: cada etapa do pipeline grava status+output no `step` (visível em
+  `GET /v1/tasks/{id}/steps` e na tela Tarefas).
+
+> Parciais do M4 (→ **M4.3**): telas dedicadas CI/QA/Telemetria; modelo do planner via
+> proto (hoje o relay usa opus por padrão).
 
 ## Estado
 - **M0** — fundação: serviços compilam e sobem, banco migrado.
@@ -175,5 +188,10 @@ REST: `GET /v1/interventions`, `POST /v1/interventions/{task}/answer`; PRs expõ
   destrava o merge (task `blocked` → `/v1/interventions` → merge). Telas **Intervenção**
   + **PRs** (gates). Validado e2e (gate humano, auto-merge, teste falhando barra o merge).
 
-**M3 completo; M4 em curso.** Próximo: **M4.2** (agent_profile, reconciliação, telas
-CI/QA/Logs) ou **M5** (multi-tenant/Team) ou hardening (M6).
+- **M4.2** — agent_profile (modelo por agente: coder=opus, qa=haiku, reviewer=sonnet),
+  **identidade de device estável** (reconnect como mesmo device), **reconciliação**
+  (`TaskStateSnapshot` no reconnect retoma o step pendente) e timeline de steps (Logs).
+  Validado e2e: review usa o modelo do reviewer; merge perdido offline é retomado no reconnect.
+
+**M3 completo; M4.1+M4.2 feitos.** Próximo: **M4.3** (telas CI/QA/Telemetria) ou
+**M5** (multi-tenant/Team) ou hardening (M6).

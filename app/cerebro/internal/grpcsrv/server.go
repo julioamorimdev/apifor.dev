@@ -138,6 +138,14 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 				log.Printf("step falhou: task=%s erro=%s", ev.GetTaskId(), ev.GetError())
 			}
 
+		case apiforv1.MsgType_TASK_STATE_SNAPSHOT:
+			// M4.2: reconciliação — o executor reportou uma tarefa com workdir local;
+			// retoma o próximo step pendente (ex.: merge perdido enquanto offline).
+			if snap := env.GetTaskStateSnapshot(); snap != nil {
+				log.Printf("reconcile: snapshot task=%s status=%s", snap.GetTaskId(), snap.GetStatus())
+				s.reconcileTask(ctx, snap.GetTaskId())
+			}
+
 		case apiforv1.MsgType_PLAN_RESULT:
 			pr := env.GetPlanResult()
 			if pr == nil {
@@ -166,6 +174,7 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 					Branch:      "apifor/" + pr.GetTaskId(),
 					ChangeReq:   tr.Prompt,
 					TargetFiles: pr.GetTargetFiles(),
+					Model:       s.DB.GetAgentModel(ctx, "coder"),
 				}
 				blob, _ := json.Marshal(instr)
 				out <- &apiforv1.Envelope{
@@ -191,6 +200,7 @@ type execInstructions struct {
 	Branch      string   `json:"branch"`
 	ChangeReq   string   `json:"change_request"`
 	TargetFiles []string `json:"target_files,omitempty"`
+	Model       string   `json:"model,omitempty"` // M4.2: modelo do agente desta etapa
 }
 
 // stepResult é o output JSON de um step do pipeline (exec/test/review/merge).
@@ -206,13 +216,14 @@ type stepResult struct {
 }
 
 // dispatchStep empurra o próximo step (test/review/merge) ao executor da org.
-func (s *Server) dispatchStep(ctx context.Context, taskID string, kind apiforv1.StepKind) {
+// model = modelo do agente desta etapa (vazio p/ test/merge, que não chamam LLM).
+func (s *Server) dispatchStep(ctx context.Context, taskID string, kind apiforv1.StepKind, model string) {
 	tr, err := s.DB.GetTaskRepo(ctx, taskID)
 	if err != nil || tr == nil || tr.CloneURL == "" {
 		log.Printf("dispatchStep: sem repo p/ task=%s", taskID)
 		return
 	}
-	instr := execInstructions{RepoURL: tr.CloneURL, BaseBranch: tr.DefaultBranch, Branch: "apifor/" + taskID, ChangeReq: tr.Prompt}
+	instr := execInstructions{RepoURL: tr.CloneURL, BaseBranch: tr.DefaultBranch, Branch: "apifor/" + taskID, ChangeReq: tr.Prompt, Model: model}
 	blob, _ := json.Marshal(instr)
 	s.Hub.Send(tr.OrgID, &apiforv1.Envelope{
 		Type: apiforv1.MsgType_DISPATCH_STEP,
@@ -220,7 +231,7 @@ func (s *Server) dispatchStep(ctx context.Context, taskID string, kind apiforv1.
 			StepId: db.NewID("stp"), TaskId: taskID, Kind: kind, Instructions: string(blob),
 		}},
 	})
-	log.Printf("step despachado: task=%s kind=%v", taskID, kind)
+	log.Printf("step despachado: task=%s kind=%v model=%q", taskID, kind, model)
 }
 
 // advancePipeline avança plan→exec→test→review→merge aplicando os gates server-side.
@@ -228,25 +239,28 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 	switch r.Kind {
 	case "exec":
 		_ = s.DB.SaveExecResult(ctx, taskID, r.Branch, r.Url) // PR aberto
+		s.DB.RecordStepOutput(ctx, taskID, "exec", "done", "PR "+r.Branch)
 		log.Printf("pipeline: PR criado task=%s branch=%s -> test", taskID, r.Branch)
-		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST, "")
 	case "test":
 		_ = s.DB.SetCIResult(ctx, taskID, r.Passed, r.Summary)
 		if r.Passed {
+			s.DB.RecordStepOutput(ctx, taskID, "test", "done", r.Summary)
 			log.Printf("pipeline: CI verde task=%s -> review", taskID)
-			s.dispatchStep(ctx, taskID, apiforv1.StepKind_REVIEW)
+			s.dispatchStep(ctx, taskID, apiforv1.StepKind_REVIEW, s.DB.GetAgentModel(ctx, "reviewer"))
 		} else {
+			s.DB.RecordStepOutput(ctx, taskID, "test", "failed", r.Summary)
 			_ = s.DB.FailTask(ctx, taskID, "gate: testes falharam")
 			log.Printf("pipeline: CI vermelho task=%s -> failed", taskID)
 		}
 	case "review":
 		_ = s.DB.SetAIReview(ctx, taskID, r.Approved)
+		s.DB.RecordStepOutput(ctx, taskID, "review", boolStatus(r.Approved), r.Comments)
 		if !r.Approved {
 			_ = s.DB.FailTask(ctx, taskID, "gate: revisão IA pediu mudanças")
 			log.Printf("pipeline: review IA reprovou task=%s -> failed", taskID)
 			return
 		}
-		// gate de revisão humana
 		if s.MergeRequireHuman {
 			if ok, _ := s.DB.HumanApproved(ctx, taskID); !ok {
 				_ = s.DB.SetTaskBlocked(ctx, taskID, "human_review")
@@ -255,10 +269,48 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 			}
 		}
 		log.Printf("pipeline: gates ok task=%s -> merge", taskID)
-		s.dispatchStep(ctx, taskID, apiforv1.StepKind_MERGE)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_MERGE, "")
 	case "merge":
 		_ = s.DB.MarkMerged(ctx, taskID, r.Url)
 		log.Printf("pipeline: MERGED task=%s url=%s", taskID, r.Url)
+	}
+}
+
+func boolStatus(ok bool) string {
+	if ok {
+		return "done"
+	}
+	return "failed"
+}
+
+// reconcileTask retoma o próximo step pendente de uma tarefa não-terminal (reconnect).
+// Cobre o caso de um dispatch perdido enquanto o executor estava offline (ex.: merge).
+func (s *Server) reconcileTask(ctx context.Context, taskID string) {
+	ps, err := s.DB.GetTaskPipelineState(ctx, taskID)
+	if err != nil || ps == nil {
+		return
+	}
+	switch ps.Status {
+	case "merged", "failed", "canceled":
+		return
+	}
+	if !ps.HasPR {
+		return // antes do exec não dá p/ retomar (refs/plano não persistidos)
+	}
+	switch {
+	case ps.CIStatus == "none" || ps.CIStatus == "":
+		log.Printf("reconcile: task=%s retomando TEST", taskID)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST, "")
+	case ps.CIStatus == "passed" && (ps.AIStatus == "none" || ps.AIStatus == ""):
+		log.Printf("reconcile: task=%s retomando REVIEW", taskID)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_REVIEW, s.DB.GetAgentModel(ctx, "reviewer"))
+	case ps.AIStatus == "approved":
+		if s.MergeRequireHuman && ps.HuStatus != "approved" {
+			_ = s.DB.SetTaskBlocked(ctx, taskID, "human_review")
+			return
+		}
+		log.Printf("reconcile: task=%s retomando MERGE", taskID)
+		s.dispatchStep(ctx, taskID, apiforv1.StepKind_MERGE, "")
 	}
 }
 

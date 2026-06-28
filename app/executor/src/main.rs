@@ -20,7 +20,7 @@ use pb::envelope::Payload;
 use pb::orchestrator_client::OrchestratorClient;
 use pb::{
     Envelope, EnrollRequest, Heartbeat, LeaseRequest, MsgType, PlanResult, PlanStep, StepEvent,
-    StepPhase, WorkerSource,
+    StepPhase, TaskStateSnapshot, WorkerSource,
 };
 use std::env;
 use std::sync::Arc;
@@ -38,6 +38,25 @@ struct LoginResp {
 
 fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+}
+
+/// Lista os task_ids que ainda têm workdir local (APIFOR_HOME/work/<task>).
+fn local_task_dirs() -> Vec<String> {
+    let home = env::var("APIFOR_HOME").unwrap_or_else(|_| "/var/lib/apifor".into());
+    let work = std::path::Path::new(&home).join("work");
+    let mut out = vec![];
+    if let Ok(rd) = std::fs::read_dir(work) {
+        for e in rd.flatten() {
+            if e.path().is_dir() {
+                if let Some(name) = e.file_name().to_str() {
+                    if name.starts_with("tsk_") {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 fn env_msg(t: MsgType, p: Payload) -> Envelope {
@@ -149,41 +168,51 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         sleep(Duration::from_secs(2)).await;
     };
     let ca = Certificate::from_pem(ca_pem);
-    let (csr_pem, key_pem) = tlsid::make_csr();
-    println!("CA obtida + CSR gerado (chave privada fica local)");
 
-    // 3. Enroll sobre TLS (server-TLS, ainda sem cert de cliente): CSR -> cert de device
-    let enroll_tls = ClientTlsConfig::new().ca_certificate(ca.clone()).domain_name("cerebro");
-    let enroll_ch = loop {
-        match Endpoint::from_shared(grpc.clone())?
-            .tls_config(enroll_tls.clone())?
-            .connect()
-            .await
-        {
-            Ok(c) => break c,
-            Err(e) => {
-                eprintln!("grpc(enroll) retry: {e}");
-                sleep(Duration::from_secs(2)).await;
-            }
+    // 3. Identidade: reutiliza a salva (reconnect como MESMO device) ou faz enroll.
+    let (cert_pem, key_pem) = match tlsid::load_identity() {
+        Some((c, k)) => {
+            println!("identidade local reutilizada (reconnect como mesmo device)");
+            (c, k)
+        }
+        None => {
+            let (csr_pem, key_pem) = tlsid::make_csr();
+            println!("CSR gerado (chave privada fica local)");
+            let enroll_tls = ClientTlsConfig::new().ca_certificate(ca.clone()).domain_name("cerebro");
+            let enroll_ch = loop {
+                match Endpoint::from_shared(grpc.clone())?.tls_config(enroll_tls.clone())?.connect().await {
+                    Ok(c) => break c,
+                    Err(e) => {
+                        eprintln!("grpc(enroll) retry: {e}");
+                        sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            };
+            let enr = OrchestratorClient::new(enroll_ch)
+                .enroll(EnrollRequest {
+                    enrollment_token: lr.access_token,
+                    csr: csr_pem.into_bytes(),
+                    device_label: "executor-m4".into(),
+                })
+                .await?
+                .into_inner();
+            println!("enroll ok (mTLS): device={}", enr.device_id);
+            tlsid::save_identity(&enr.certificate, &key_pem);
+            (enr.certificate, key_pem)
         }
     };
-    let enr = OrchestratorClient::new(enroll_ch)
-        .enroll(EnrollRequest {
-            enrollment_token: lr.access_token,
-            csr: csr_pem.into_bytes(),
-            device_label: "executor-m3".into(),
-        })
-        .await?
-        .into_inner();
-    println!("enroll ok (mTLS): device={}", enr.device_id);
 
     // 4. canal mTLS p/ a stream — apresenta o cert de device (chave priva local)
-    let id = Identity::from_pem(enr.certificate, key_pem.into_bytes());
+    let id = Identity::from_pem(cert_pem, key_pem.into_bytes());
     let stream_tls = ClientTlsConfig::new().ca_certificate(ca).identity(id).domain_name("cerebro");
-    let stream_ch = Endpoint::from_shared(grpc.clone())?
-        .tls_config(stream_tls)?
-        .connect()
-        .await?;
+    let stream_ch = match Endpoint::from_shared(grpc.clone())?.tls_config(stream_tls)?.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            tlsid::clear_identity();
+            eprintln!("stream falhou; identidade limpa p/ re-enroll no próximo start: {e}");
+            return Err(e.into());
+        }
+    };
     let mut client = OrchestratorClient::new(stream_ch);
 
     // 3. pré-enfileira heartbeat + lease, DEPOIS abre a stream
@@ -213,6 +242,21 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let req = Request::new(ReceiverStream::new(rx));
     let mut inbound = client.stream(req).await?.into_inner();
     println!("stream aberto (mTLS), lease solicitado");
+
+    // M4.2: reconciliação — reporta as tarefas que ainda têm workdir local, p/ o
+    // cérebro retomar o próximo step pendente (ex.: merge perdido enquanto offline).
+    for task_id in local_task_dirs() {
+        tx.send(env_msg(
+            MsgType::TaskStateSnapshot,
+            Payload::TaskStateSnapshot(TaskStateSnapshot {
+                task_id,
+                steps: vec![],
+                current_step_id: String::new(),
+                status: "has_workdir".into(),
+            }),
+        ))
+        .await?;
+    }
 
     // 4. loop de entrada
     while let Some(env) = inbound.message().await? {

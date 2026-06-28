@@ -61,7 +61,39 @@ func (d *DB) SeedDemo(ctx context.Context) error {
 		ON CONFLICT (workspace_id) DO NOTHING`, NewID("pcfg"), DemoWspID); err != nil {
 		return err
 	}
+	// M4.2: agent_profile globais (modelo por agente)
+	if _, err := b.Exec(ctx, `INSERT INTO agent_profile(id,org_id,key,label,model) VALUES
+		('agp_coder',NULL,'coder','Coder','claude_opus'),
+		('agp_qa',NULL,'qa','QA','claude_haiku'),
+		('agp_reviewer',NULL,'reviewer','Reviewer','claude_sonnet')
+		ON CONFLICT (id) DO NOTHING`); err != nil {
+		return err
+	}
 	return nil
+}
+
+// modelID resolve o enum agent_model p/ o id de modelo real.
+func modelID(enum string) string {
+	switch enum {
+	case "claude_opus":
+		return "claude-opus-4-8"
+	case "claude_sonnet":
+		return "claude-sonnet-4-6"
+	case "claude_haiku":
+		return "claude-haiku-4-5"
+	default:
+		return "claude-opus-4-8"
+	}
+}
+
+// GetAgentModel devolve o id de modelo do agent_profile (coder/qa/reviewer).
+func (d *DB) GetAgentModel(ctx context.Context, key string) string {
+	var enum string
+	err := d.Pool.QueryRow(ctx, `SELECT model::text FROM agent_profile WHERE key=$1 AND org_id IS NULL ORDER BY created_at LIMIT 1`, key).Scan(&enum)
+	if err != nil {
+		return "claude-opus-4-8"
+	}
+	return modelID(enum)
 }
 
 type User struct {
@@ -333,6 +365,47 @@ func (d *DB) RejectHumanReview(ctx context.Context, taskID, note string) error {
 		_, _ = d.Pool.Exec(ctx, `UPDATE pull_request SET human_review_status='changes',updated_at=now() WHERE id=$1`, prID)
 	}
 	return d.FailTask(ctx, taskID, "revisão humana reprovou: "+note)
+}
+
+// PipelineState — estado da tarefa + gates do PR, p/ a reconciliação no reconnect.
+type PipelineState struct {
+	Status   string
+	HasPR    bool
+	CIStatus string
+	AIStatus string
+	HuStatus string
+}
+
+func (d *DB) GetTaskPipelineState(ctx context.Context, taskID string) (*PipelineState, error) {
+	var ps PipelineState
+	var ci, ai, hu *string
+	err := d.Pool.QueryRow(ctx, `SELECT t.status,p.ci_status::text,p.ai_review_status::text,p.human_review_status::text
+		FROM task t LEFT JOIN pull_request p ON p.task_id=t.id WHERE t.id=$1 ORDER BY p.created_at DESC LIMIT 1`, taskID).
+		Scan(&ps.Status, &ci, &ai, &hu)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if ci != nil {
+		ps.HasPR = true
+		ps.CIStatus, ps.AIStatus, ps.HuStatus = *ci, deref(ai), deref(hu)
+	}
+	return &ps, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// RecordStepOutput atualiza o step do plano (por tipo) com status + output — p/ a timeline/Logs.
+func (d *DB) RecordStepOutput(ctx context.Context, taskID, stepType, status, output string) {
+	_, _ = d.Pool.Exec(ctx, `UPDATE step SET status=$3,output=$4::jsonb,ended_at=now()
+		WHERE task_id=$1 AND type=$2`, taskID, stepType, status, `{"log":`+jsonStr(output)+`}`)
 }
 
 // ListInterventions: tarefas bloqueadas aguardando revisão humana (gate de merge).
