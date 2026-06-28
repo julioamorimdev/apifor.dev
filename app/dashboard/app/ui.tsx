@@ -30,11 +30,80 @@ const EN_LABEL: Record<string, string> = {
 };
 export function useLang(): [string, (l: string) => void] {
   const [lang, set] = useState("pt");
-  useEffect(() => { try { set(localStorage.getItem("apifor_lang") || "pt"); } catch {} }, []);
-  const setLang = useCallback((l: string) => { try { localStorage.setItem("apifor_lang", l); } catch {}; set(l); }, []);
+  useEffect(() => {
+    const read = () => { try { set(localStorage.getItem("apifor_lang") || "pt"); } catch {} };
+    read();
+    window.addEventListener("apifor-lang", read);
+    return () => window.removeEventListener("apifor-lang", read);
+  }, []);
+  const setLang = useCallback((l: string) => {
+    try { localStorage.setItem("apifor_lang", l); } catch {}
+    set(l);
+    window.dispatchEvent(new Event("apifor-lang")); // sincroniza todas as instâncias
+  }, []);
   return [lang, setLang];
 }
 const t = (lang: string, k: string) => (STR[lang] || STR.pt)[k] || STR.pt[k] || k;
+
+// dicionário PT->EN do conteúdo (aplicado nos componentes compartilhados; fallback = PT)
+const TR: Record<string, string> = {
+  // títulos
+  "Fila": "Queue", "Tarefas": "Tasks", "Intervenção": "Intervention", "Rotinas": "Routines", "Telemetria": "Telemetry",
+  "Conhecimento": "Knowledge", "Configuração": "Settings", "Auditoria": "Audit", "Organização": "Organization", "Uso": "Usage",
+  "Faturas": "Invoices", "Planos": "Plans", "Conta": "Account", "Ajuda": "Help", "Notificações": "Notifications",
+  "Bem-vindo ao apifor.dev": "Welcome to apifor.dev", "Web & API": "Web & API",
+  // eyebrows (grupos)
+  "Operação": "Operations", "Sistema": "System", "Conhecimento & sistema": "Knowledge & system", "Conta & cobrança": "Account & billing",
+  // subtítulos
+  "Estados das tarefas e reprocessamento.": "Task states and reprocessing.",
+  "Crie e acompanhe as tarefas dos workers.": "Create and track worker tasks.",
+  "Status de revisão e CI, com links pro GitHub.": "Review and CI status, with GitHub links.",
+  "Integração contínua — execuções de build/teste.": "Continuous integration — build/test runs.",
+  "Relatórios de teste por tarefa.": "Test reports per task.",
+  "Gate de revisão humana — destrava o merge.": "Human review gate — unblocks the merge.",
+  "Gatilhos agendados e manuais.": "Scheduled and manual triggers.",
+  "Métricas agregadas da org.": "Aggregated org metrics.",
+  "Feed do pipeline (steps dos workers) em tempo real.": "Pipeline feed (worker steps) in real time.",
+  "Workers e tarefas em tempo real.": "Workers and tasks in real time.",
+  "Memória e base de conhecimento.": "Memory and knowledge base.",
+  "Repositórios e segredos.": "Repositories and secrets.",
+  "Acesso programático ao control plane (REST + SSE).": "Programmatic access to the control plane (REST + SSE).",
+  "Workers gerenciados na nuvem (add-on Enterprise).": "Managed cloud workers (Enterprise add-on).",
+  "Quem fez o quê — server-side.": "Who did what — server-side.",
+  "Sessão, membros e workspaces.": "Session, members and workspaces.",
+  "Consumo do ciclo atual frente aos limites do plano.": "Current cycle usage vs plan limits.",
+  "Faturas emitidas (webhooks do Stripe).": "Issued invoices (Stripe webhooks).",
+  "Comece no Free, suba quando precisar.": "Start on Free, upgrade when you need.",
+  "Perfil, sessão e preferências.": "Profile, session and preferences.",
+  "Primeiros passos, docs e a fronteira de privacidade.": "Getting started, docs and the privacy boundary.",
+  "Eventos do cérebro em tempo real (SSE).": "Brain events in real time (SSE).",
+  "4 passos pra primeira tarefa.": "4 steps to your first task.",
+  // cabeçalhos de card
+  "Pull requests": "Pull requests", "Execuções de CI": "CI runs", "Relatórios de QA": "QA reports", "Estado das tarefas": "Task state",
+  "Workers": "Workers", "Tarefas em andamento": "In-progress tasks", "Nova tarefa": "New task", "Registrar repositório": "Register repository",
+  "Repositórios": "Repositories", "Segredos": "Secrets", "Nova rotina": "New routine", "Sessão": "Session", "Membros": "Members",
+  "Workspaces": "Workspaces", "Memória": "Memory", "Base de conhecimento (KB)": "Knowledge base (KB)", "Assinatura": "Subscription",
+  "Dispositivos": "Devices", "Aguardando revisão humana": "Awaiting human review", "Trilha de auditoria": "Audit trail",
+  "Perfil": "Profile", "Preferências": "Preferences", "Começar em 4 passos": "Get started in 4 steps", "Documentação": "Documentation",
+  "Base da API": "API base", "Endpoints principais": "Main endpoints", "O que vem no add-on": "What's in the add-on",
+  "Workers ao vivo": "Live workers", "Estado do pool": "Pool state", "Cloud workers": "Cloud workers",
+  // labels de stat/meter card
+  "Workers ativos": "Active workers", "PRs abertos": "Open PRs", "Concluídas": "Completed", "Aprovação IA": "AI approval",
+  "Total": "Total", "Abertos": "Open", "CI verde": "CI green", "Merged": "Merged", "Execuções": "Runs", "Falhas": "Failures",
+  "Verde": "Green", "Aprovação": "Approval", "Relatórios": "Reports", "Aprovados": "Approved", "Ativas": "Active",
+  "Tokens": "Tokens", "Worker-hours": "Worker-hours", "Workers simultâneos": "Concurrent workers",
+  "Worker-hours (semana)": "Worker-hours (week)", "Plano": "Plan",
+  // subs de card
+  "pull requests": "pull requests", "em revisão/merge": "review/merge", "revisão/merge": "review/merge", "testes passaram": "tests passed",
+  "concluídos": "completed", "no pool": "in pool", "aguardando": "waiting", "vermelhas": "red", "passaram": "passed",
+  "status passed": "status passed", "status failed": "status failed", "concluídas": "completed", "gate vermelho": "red gate",
+  "em andamento": "running", "abertos + merged": "open + merged", "relay/coder/review": "relay/coder/review", "na semana": "this week",
+  "renovação por heartbeat": "heartbeat renewal", "total": "total",
+  // pills + buckets
+  "Todos": "All", "Na fila": "In queue", "Em execução": "Running", "Encerradas": "Closed", "Em revisão": "In review",
+  "CI falhou": "CI failed", "Falhou": "Failed", "OK": "OK",
+};
+const tr = (lang: string, s?: string) => (lang === "en" && s ? TR[s] || s : s);
 const navLabel = (lang: string, href: string, pt: string) => (lang === "en" ? EN_LABEL[href] || pt : pt);
 
 // ───────────────────────── tokens de estilo (CSS vars) ─────────────────────────
@@ -59,12 +128,13 @@ export const codeDim = { fontFamily: "var(--mono)", color: "var(--mute)", fontSi
 
 // cabeçalho de página: eyebrow + título grande + subtítulo (+ ações à direita)
 export function PageHead({ eyebrow, title, subtitle, right }: { eyebrow?: string; title: string; subtitle?: string; right?: React.ReactNode }) {
+  const [lang] = useLang();
   return (
     <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 20, gap: 16, flexWrap: "wrap" }}>
       <div>
-        {eyebrow && <div style={{ color: "var(--mute)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".09em", marginBottom: 5 }}>{eyebrow}</div>}
-        <h1 style={{ margin: 0, fontSize: 26 }}>{title}</h1>
-        {subtitle && <div style={{ color: "var(--dim)", fontSize: 14, marginTop: 6 }}>{subtitle}</div>}
+        {eyebrow && <div style={{ color: "var(--mute)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".09em", marginBottom: 5 }}>{tr(lang, eyebrow)}</div>}
+        <h1 style={{ margin: 0, fontSize: 26 }}>{tr(lang, title)}</h1>
+        {subtitle && <div style={{ color: "var(--dim)", fontSize: 14, marginTop: 6 }}>{tr(lang, subtitle)}</div>}
       </div>
       {right}
     </div>
@@ -73,9 +143,10 @@ export function PageHead({ eyebrow, title, subtitle, right }: { eyebrow?: string
 
 // cabeçalho dentro de um card
 export function CardHead({ title, right }: { title: string; right?: React.ReactNode }) {
+  const [lang] = useLang();
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
-      <b style={{ fontFamily: "var(--head)", fontSize: 13.5, letterSpacing: "-.01em" }}>{title}</b>
+      <b style={{ fontFamily: "var(--head)", fontSize: 13.5, letterSpacing: "-.01em" }}>{tr(lang, title)}</b>
       {right}
     </div>
   );
@@ -83,12 +154,13 @@ export function CardHead({ title, right }: { title: string; right?: React.ReactN
 
 // barra empilhada de estado + legenda (ex.: "Estado das tarefas")
 export function StateBar({ title, counts }: { title: string; counts: { label: string; n: number; tone: string }[] }) {
+  const [lang] = useLang();
   const total = counts.reduce((a, c) => a + c.n, 0);
   return (
     <div style={{ ...card, padding: 18 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <b style={{ fontFamily: "var(--head)", fontSize: 14 }}>{title}</b>
-        <span style={{ color: "var(--mute)", fontSize: 13 }}>{total} no pipeline</span>
+        <b style={{ fontFamily: "var(--head)", fontSize: 14 }}>{tr(lang, title)}</b>
+        <span style={{ color: "var(--mute)", fontSize: 13 }}>{total} {lang === "en" ? "in pipeline" : "no pipeline"}</span>
       </div>
       <div style={{ display: "flex", height: 8, borderRadius: 6, overflow: "hidden", background: "var(--border)", marginBottom: 16 }}>
         {counts.filter((c) => c.n).map((c, i) => <div key={i} style={{ flex: c.n, background: `var(--${c.tone})` }} />)}
@@ -96,7 +168,7 @@ export function StateBar({ title, counts }: { title: string; counts: { label: st
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "9px 28px" }}>
         {counts.map((c, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13 }}>
-            <span style={{ color: "var(--dim)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ width: 8, height: 8, borderRadius: 8, background: `var(--${c.tone})` }} />{c.label}</span>
+            <span style={{ color: "var(--dim)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ width: 8, height: 8, borderRadius: 8, background: `var(--${c.tone})` }} />{tr(lang, c.label)}</span>
             <b>{c.n}</b>
           </div>
         ))}
@@ -107,12 +179,13 @@ export function StateBar({ title, counts }: { title: string; counts: { label: st
 
 // linha de filtros em pílulas
 export function Pills({ options, value, onChange }: { options: [string, string][]; value: string; onChange: (v: string) => void }) {
+  const [lang] = useLang();
   return (
     <div style={{ display: "flex", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 9, padding: 3 }}>
       {options.map(([val, label]) => (
         <button key={val} onClick={() => onChange(val)}
           style={{ border: "none", cursor: "pointer", borderRadius: 7, padding: "5px 12px", fontSize: 13, fontWeight: 500,
-            background: value === val ? "var(--card)" : "transparent", color: value === val ? "var(--ink)" : "var(--dim)" }}>{label}</button>
+            background: value === val ? "var(--card)" : "transparent", color: value === val ? "var(--ink)" : "var(--dim)" }}>{tr(lang, label)}</button>
       ))}
     </div>
   );
@@ -137,24 +210,26 @@ export function useSeries(value: number, n = 24) {
 }
 // card de métrica: rótulo + número grande + sparkline + sub
 export function StatCard({ label, value, suffix, tone = "accent", series, sub }: { label: string; value: React.ReactNode; suffix?: string; tone?: string; series?: number[]; sub?: string }) {
+  const [lang] = useLang();
   return (
     <div style={{ ...card, padding: 16, marginBottom: 0 }}>
-      <div style={{ color: "var(--mute)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>{label}</div>
+      <div style={{ color: "var(--mute)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>{tr(lang, label)}</div>
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 10 }}>
         <div style={{ fontFamily: "var(--head)", fontWeight: 800, fontSize: 28, lineHeight: 1 }}>{value}{suffix && <span style={{ fontSize: 14, color: "var(--mute)", fontWeight: 600 }}>{suffix}</span>}</div>
         {series && series.length > 1 && <Sparkline data={series} color={`--${tone}`} />}
       </div>
-      {sub && <div style={{ color: "var(--mute)", fontSize: 12, marginTop: 9 }}>{sub}</div>}
+      {sub && <div style={{ color: "var(--mute)", fontSize: 12, marginTop: 9 }}>{tr(lang, sub)}</div>}
     </div>
   );
 }
 
 // card de medidor: rótulo + valor/limite + barra de progresso + sub
 export function MeterCard({ label, value, limit, pct, tone = "accent", sub }: { label: string; value: React.ReactNode; limit?: React.ReactNode; pct: number; tone?: string; sub?: string }) {
+  const [lang] = useLang();
   const p = Math.max(0, Math.min(100, pct || 0));
   return (
     <div style={{ ...card, padding: 16, marginBottom: 0 }}>
-      <div style={{ color: "var(--mute)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>{label}</div>
+      <div style={{ color: "var(--mute)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>{tr(lang, label)}</div>
       <div style={{ fontFamily: "var(--head)", fontWeight: 800, fontSize: 23, marginBottom: 12 }}>{value}{limit !== undefined && <span style={{ fontSize: 14, color: "var(--mute)", fontWeight: 600 }}> / {limit}</span>}</div>
       <div style={{ height: 6, borderRadius: 6, background: "var(--border)", overflow: "hidden" }}>
         <div style={{ width: p + "%", height: "100%", background: `var(--${tone})`, transition: "width .4s" }} />
