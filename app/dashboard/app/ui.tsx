@@ -93,8 +93,36 @@ function useUnread() {
   return n;
 }
 
-const countBadge = (n?: number) =>
-  n ? <span style={{ marginLeft: "auto", background: "var(--accent-tint)", color: "var(--accent)", borderRadius: 20, padding: "0 7px", fontSize: 11, fontWeight: 600 }}>{n}</span> : null;
+const countBadge = (n?: number, tone = "accent") =>
+  n ? <span style={{ marginLeft: "auto", background: `var(--${tone}-tint)`, color: `var(--${tone})`, borderRadius: 20, padding: "0 7px", fontSize: 11, fontWeight: 600 }}>{n}</span> : null;
+
+// ───────────────────────── ícones (linha, currentColor) ─────────────────────────
+const ICONS: Record<string, string[]> = {
+  "/": ["M22 12h-4l-3 9L9 3l-3 9H2"],
+  "/queue": ["M8 6h13M8 12h13M8 18h13", "M3 6h.01M3 12h.01M3 18h.01"],
+  "/tasks": ["M9 11l3 3L22 4", "M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"],
+  "/prs": ["M18 6v8a3 3 0 0 1-3 3H7", "M6 9V5", "M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M18 6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
+  "/interventions": ["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z", "M12 9v4", "M12 17h.01"],
+  "/ci": ["M6 3v12", "M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M15 6a9 9 0 0 1-9 9"],
+  "/qa": ["M22 11.08V12a10 10 0 1 1-5.93-9.14", "M22 4L12 14.01l-3-3"],
+  "/routines": ["M17 1l4 4-4 4", "M3 11V9a4 4 0 0 1 4-4h14", "M7 23l-4-4 4-4", "M21 13v2a4 4 0 0 1-4 4H3"],
+  "/telemetry": ["M3 3v18h18", "M18 17V9", "M13 17V5", "M8 17v-3"],
+  "/knowledge": ["M4 19.5A2.5 2.5 0 0 1 6.5 17H20", "M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"],
+  "/config": ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"],
+  "/audit": ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
+  "/org": ["M3 21h18", "M5 21V7l8-4v18", "M19 21V11l-6-3"],
+  "/usage": ["M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "M3.34 19a10 10 0 1 1 17.32 0"],
+  "/invoices": ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z", "M14 2v6h6", "M16 13H8", "M16 17H8"],
+  "/pricing": ["M1 4h22v16H1z", "M1 10h22"],
+};
+function Ico({ name, color }: { name: string; color: string }) {
+  const paths = ICONS[name] || ["M4 12h16"];
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      {paths.map((d, i) => <path key={i} d={d} />)}
+    </svg>
+  );
+}
 
 // ───────────────────────── command palette (⌘K) ─────────────────────────
 const ALL_ITEMS = NAV.flatMap((g) => g.items.map(([href, label]) => ({ href, label, group: g.key }))).concat([
@@ -191,8 +219,9 @@ function Sidebar() {
   const [lang] = useLang();
   return (
     <aside style={{ width: 232, flexShrink: 0, background: "var(--sidebar)", borderRight: "1px solid var(--border)", height: "100vh", position: "sticky", top: 0, display: "flex", flexDirection: "column", overflowY: "auto" }}>
-      <div style={{ padding: "18px 18px 10px" }}>
-        <div style={{ fontFamily: "var(--head)", fontWeight: 900, fontSize: 20, letterSpacing: "-.02em" }}>apifor<span style={{ color: "var(--accent)" }}>DEV</span></div>
+      <div style={{ padding: "18px 18px 12px", display: "flex", alignItems: "baseline", gap: 5 }}>
+        <span style={{ fontFamily: "var(--head)", fontWeight: 900, fontSize: 21, letterSpacing: "-.03em" }}>apifor<span style={{ color: "var(--accent)" }}>.</span></span>
+        <span style={{ fontFamily: "var(--head)", fontWeight: 800, fontSize: 11, color: "var(--accent)", letterSpacing: ".14em" }}>DEV</span>
       </div>
       <WorkspaceMenu lang={lang} />
       <nav style={{ padding: "4px 8px", flex: 1 }}>
@@ -203,9 +232,11 @@ function Sidebar() {
               const active = path === href;
               return (
                 <a key={href} href={href} className={active ? "" : "apf-link"}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, color: active ? "var(--accent-ink)" : "var(--dim)", background: active ? "var(--accent)" : "transparent", fontWeight: active ? 600 : 400 }}>
+                  style={{ position: "relative", display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, color: active ? "var(--ink)" : "var(--dim)", background: active ? "var(--elev)" : "transparent", fontWeight: active ? 600 : 500 }}>
+                  {active && <span style={{ position: "absolute", left: 0, top: 7, bottom: 7, width: 3, borderRadius: 3, background: "var(--accent)" }} />}
+                  <Ico name={href} color={active ? "var(--accent)" : "var(--mute)"} />
                   {navLabel(lang, href, label)}
-                  {countBadge((counts as any)[key || ""])}
+                  {countBadge((counts as any)[key || ""], href === "/interventions" ? "red" : "accent")}
                 </a>
               );
             })}
@@ -242,6 +273,8 @@ function Topbar() {
   const [theme, toggle] = useTheme();
   const [lang, setLang] = useLang();
   const unread = useUnread();
+  const counts = useCounts();
+  const running = (counts.workers || 0) > 0;
   const ic = { width: 34, height: 34, borderRadius: 9, border: "1px solid var(--border)", background: "var(--card)", color: "var(--dim)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 15 } as const;
   const openCmd = () => window.dispatchEvent(new Event("apifor-cmdk"));
   return (
@@ -251,12 +284,16 @@ function Topbar() {
         <kbd style={{ fontFamily: "var(--mono)", fontSize: 11, border: "1px solid var(--border)", borderRadius: 5, padding: "1px 5px" }}>⌘K</kbd>
       </button>
       <span style={{ flex: 1 }} />
+      <span style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: running ? "var(--green-tint)" : "var(--border)", color: running ? "var(--green)" : "var(--mute)" }}>
+        <span style={{ width: 7, height: 7, borderRadius: 7, background: "currentColor" }} />{running ? "RODANDO" : "PARADO"}
+      </span>
       <LangMenu lang={lang} setLang={setLang} />
       <button className="apf-iconbtn" style={ic} onClick={toggle} title="Alternar tema">{theme === "dark" ? "☀️" : "🌙"}</button>
       <a className="apf-iconbtn" href="/notifications" style={{ ...ic, position: "relative" }} title="Notificações">
         🔔
         {unread > 0 && <span style={{ position: "absolute", top: -4, right: -4, background: "var(--red)", color: "#fff", borderRadius: 10, minWidth: 16, height: 16, fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px", fontWeight: 700 }}>{unread}</span>}
       </a>
+      <span style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accent)", color: "var(--accent-ink)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, fontFamily: "var(--head)" }}>AP</span>
     </header>
   );
 }
