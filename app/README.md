@@ -273,9 +273,12 @@ Falta: installer Tauri buildado + auto-update, cloud workers / SSO-SAML (infra e
 
 ## CI
 
-`.github/workflows/ci.yml` (push/PR): build+vet do **cérebro** (Go), fmt+clippy+build
-do **executor** (Rust), build+export do **dashboard** (Next) e **smoke e2e** que sobe
-o stack e valida isolamento/enforcement de **RLS**, **RBAC** e runtime **sem superuser**.
+`.github/workflows/ci.yml` (push/PR): build+vet+**test** do **cérebro** (Go),
+fmt+clippy+build+**test** do **executor** (Rust), build+export do **dashboard** (Next)
+e **smoke e2e** que sobe o stack e valida isolamento/enforcement de **RLS**, **RBAC** e
+runtime **sem superuser**. Testes de unidade cobrem JWT/bcrypt (auth), HMAC do webhook
+(billing), RBAC + tiers de rate-limit + anti-CSV-injection (httpapi) e o vault cifrado
+(executor — round-trip + garantia de não-vazamento em claro).
 
 ```bash
 make ci-smoke     # roda o smoke do CI localmente

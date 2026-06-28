@@ -16,11 +16,12 @@ jobs:
         with:
           go-version: "1.22"
           cache-dependency-path: app/cerebro/go.sum
-      - name: build + vet
+      - name: build + vet + test
         working-directory: app/cerebro
         run: |
           go build ./...
           go vet ./...
+          go test ./...
 
   executor:
     name: executor (Rust build + clippy)
@@ -35,12 +36,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/executor
-      - name: fmt + clippy + build
+      - name: fmt + clippy + build + test
         working-directory: app/executor
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
           cargo build
+          cargo test
 
   dashboard:
     name: dashboard (Next build + export)
