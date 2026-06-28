@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -122,9 +123,44 @@ func main() {
 		PublicURL:           envOr("PUBLIC_URL", "http://localhost:3000"),
 		RequireAuth:         os.Getenv("REQUIRE_AUTH") == "true", // M6.2: fecha o fallback dev
 	}
-	log.Printf("HTTP ouvindo em %s", httpAddr)
-	if err := http.ListenAndServe(httpAddr, api.Routes()); err != nil {
-		log.Fatal(err)
+	serveHTTP(httpAddr, api.Routes(), ca)
+}
+
+// serveHTTP serve o REST/SSE. TLS é opt-in: cert/key próprios (REST_TLS_CERT/KEY),
+// ou cert emitido pela CA interna (REST_TLS=true), senão HTTP em claro (dev).
+func serveHTTP(addr string, h http.Handler, ca *pki.CA) {
+	certFile, keyFile := os.Getenv("REST_TLS_CERT"), os.Getenv("REST_TLS_KEY")
+	switch {
+	case certFile != "" && keyFile != "":
+		log.Printf("HTTPS (cert próprio) ouvindo em %s", addr)
+		if err := http.ListenAndServeTLS(addr, certFile, keyFile, h); err != nil {
+			log.Fatal(err)
+		}
+	case os.Getenv("REST_TLS") == "true":
+		var dns []string
+		var ips []net.IP
+		for _, host := range strings.Split(envOr("REST_TLS_HOSTS", "localhost,127.0.0.1,cerebro"), ",") {
+			host = strings.TrimSpace(host)
+			if ip := net.ParseIP(host); ip != nil {
+				ips = append(ips, ip)
+			} else if host != "" {
+				dns = append(dns, host)
+			}
+		}
+		cert, err := ca.ServerTLSCert(dns, ips)
+		if err != nil {
+			log.Fatalf("rest tls cert: %v", err)
+		}
+		s := &http.Server{Addr: addr, Handler: h, TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}}}
+		log.Printf("HTTPS (CA interna, hosts=%v%v) ouvindo em %s", dns, ips, addr)
+		if err := s.ListenAndServeTLS("", ""); err != nil {
+			log.Fatal(err)
+		}
+	default:
+		log.Printf("HTTP ouvindo em %s", addr)
+		if err := http.ListenAndServe(addr, h); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 

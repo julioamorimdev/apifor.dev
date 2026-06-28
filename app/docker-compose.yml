@@ -67,6 +67,10 @@ services:
       REQUIRE_AUTH: "${REQUIRE_AUTH:-}"
       # produção: SEED_DEMO=false não cria o usuário/org demo. default (vazio) = semeia.
       SEED_DEMO: "${SEED_DEMO:-}"
+      # TLS no REST/SSE (opt-in). REST_TLS=true emite cert da CA interna; ou
+      # REST_TLS_CERT/REST_TLS_KEY p/ cert próprio. default (vazio) = HTTP (dev).
+      REST_TLS: "${REST_TLS:-}"
+      REST_TLS_HOSTS: "${REST_TLS_HOSTS:-}"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:
