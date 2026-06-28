@@ -271,6 +271,16 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
 **M3–M5 completos; M6 completo (RLS reads/creates/updates/deletes, sem superuser); M7 parcial.**
 Falta: installer Tauri buildado + auto-update, cloud workers / SSO-SAML (infra externa).
 
+## CI
+
+`.github/workflows/ci.yml` (push/PR): build+vet do **cérebro** (Go), fmt+clippy+build
+do **executor** (Rust), build+export do **dashboard** (Next) e **smoke e2e** que sobe
+o stack e valida isolamento/enforcement de **RLS**, **RBAC** e runtime **sem superuser**.
+
+```bash
+make ci-smoke     # roda o smoke do CI localmente
+```
+
 ## Empacotamento (M7)
 
 ```bash

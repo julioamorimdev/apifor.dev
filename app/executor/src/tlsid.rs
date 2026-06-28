@@ -29,7 +29,13 @@ pub fn save_identity(cert_pem: &[u8], key_pem: &str) {
     let _ = std::fs::create_dir_all(home());
     let (crt, key) = id_paths();
     let _ = std::fs::write(&crt, cert_pem);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&key) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&key)
+    {
         let _ = f.write_all(key_pem.as_bytes());
     }
 }

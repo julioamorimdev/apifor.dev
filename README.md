@@ -1,5 +1,7 @@
 # apifor.dev
 
+[![ci](https://github.com/julioamorimdev/apifor.dev/actions/workflows/ci.yml/badge.svg)](https://github.com/julioamorimdev/apifor.dev/actions/workflows/ci.yml)
+
 Orquestrador de **workers de IA que escrevem código**: fila de tarefas → workers isolados → Pull Request → CI/QA → merge. Modelo comercial freemium (Free / Pro / Team / Enterprise).
 
 Arquitetura **control plane / data plane**: o "cérebro" (decisão, fila, lease, billing) roda na cloud; a execução (workers, chaves de IA, código) roda **local** na máquina/VM do usuário via app desktop. Chaves e código **nunca** trafegam ao servidor.

@@ -65,7 +65,10 @@ async fn dispatch(line: &str, vault: &Arc<Vault>, http: &str) -> serde_json::Val
         "secret.put" => {
             let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let value = req.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            let kind = req.get("kind").and_then(|v| v.as_str()).unwrap_or("api_key");
+            let kind = req
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("api_key");
             if name.is_empty() || value.is_empty() {
                 return serde_json::json!({"ok": false, "error": "name e value obrigatórios"});
             }
@@ -87,7 +90,10 @@ async fn dispatch(line: &str, vault: &Arc<Vault>, http: &str) -> serde_json::Val
         }
         "kb.import" => {
             let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let category = req.get("category").and_then(|v| v.as_str()).unwrap_or("doc");
+            let category = req
+                .get("category")
+                .and_then(|v| v.as_str())
+                .unwrap_or("doc");
             let content = req.get("content").and_then(|v| v.as_str()).unwrap_or("");
             if name.is_empty() || content.is_empty() {
                 return serde_json::json!({"ok": false, "error": "name e content obrigatórios"});
@@ -96,7 +102,10 @@ async fn dispatch(line: &str, vault: &Arc<Vault>, http: &str) -> serde_json::Val
             let dir = std::path::Path::new(&home).join("kb");
             let _ = std::fs::create_dir_all(&dir);
             // sanitiza o nome (sem path traversal)
-            let safe: String = name.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
+            let safe: String = name
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+                .collect();
             if std::fs::write(dir.join(&safe), content).is_err() {
                 return serde_json::json!({"ok": false, "error": "falha ao gravar KB local"});
             }
@@ -182,8 +191,10 @@ pub async fn call(req: serde_json::Value) -> std::io::Result<serde_json::Value> 
     wr.flush().await?;
     let mut lines = BufReader::new(rd).lines();
     match lines.next_line().await? {
-        Some(l) => Ok(serde_json::from_str(&l)
-            .unwrap_or_else(|_| serde_json::json!({"ok": false, "raw": l}))),
+        Some(l) => {
+            Ok(serde_json::from_str(&l)
+                .unwrap_or_else(|_| serde_json::json!({"ok": false, "raw": l})))
+        }
         None => Ok(serde_json::json!({"ok": false, "error": "sem resposta"})),
     }
 }

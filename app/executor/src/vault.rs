@@ -17,10 +17,10 @@ use base64::Engine;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct Entry {
-    nonce: String,       // base64 (24 bytes)
-    ct: String,          // base64 (ciphertext)
+    nonce: String, // base64 (24 bytes)
+    ct: String,    // base64 (ciphertext)
     #[serde(default)]
-    kind: String,        // tipo declarado (ex.: "anthropic_api_key")
+    kind: String, // tipo declarado (ex.: "anthropic_api_key")
     fingerprint: String, // sha256(valor)[..12], só p/ exibir/registrar metadado
 }
 
@@ -96,7 +96,7 @@ impl Vault {
         let ct = self
             .cipher()
             .encrypt(XNonce::from_slice(&nonce), value.as_bytes())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         let fingerprint = fingerprint(value);
         let mut s = self.load();
         s.secrets.insert(

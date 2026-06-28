@@ -19,7 +19,7 @@ mod vault;
 use pb::envelope::Payload;
 use pb::orchestrator_client::OrchestratorClient;
 use pb::{
-    Envelope, EnrollRequest, Heartbeat, LeaseRequest, MsgType, PlanResult, PlanStep, StepEvent,
+    EnrollRequest, Envelope, Heartbeat, LeaseRequest, MsgType, PlanResult, PlanStep, StepEvent,
     StepPhase, TaskStateSnapshot, WorkerSource,
 };
 use std::env;
@@ -37,7 +37,10 @@ struct LoginResp {
 }
 
 fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 /// Lista os task_ids que ainda têm workdir local (APIFOR_HOME/work/<task>).
@@ -87,7 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn cli_secret_put(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let name = args.get(2).cloned().unwrap_or_else(|| "anthropic".into());
-    let kind = args.get(3).cloned().unwrap_or_else(|| "anthropic_api_key".into());
+    let kind = args
+        .get(3)
+        .cloned()
+        .unwrap_or_else(|| "anthropic_api_key".into());
     let value = match env::var("VALUE") {
         Ok(v) if !v.is_empty() => v,
         _ => {
@@ -199,9 +205,15 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         None => {
             let (csr_pem, key_pem) = tlsid::make_csr();
             println!("CSR gerado (chave privada fica local)");
-            let enroll_tls = ClientTlsConfig::new().ca_certificate(ca.clone()).domain_name("cerebro");
+            let enroll_tls = ClientTlsConfig::new()
+                .ca_certificate(ca.clone())
+                .domain_name("cerebro");
             let enroll_ch = loop {
-                match Endpoint::from_shared(grpc.clone())?.tls_config(enroll_tls.clone())?.connect().await {
+                match Endpoint::from_shared(grpc.clone())?
+                    .tls_config(enroll_tls.clone())?
+                    .connect()
+                    .await
+                {
                     Ok(c) => break c,
                     Err(e) => {
                         eprintln!("grpc(enroll) retry: {e}");
@@ -225,8 +237,15 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. canal mTLS p/ a stream — apresenta o cert de device (chave priva local)
     let id = Identity::from_pem(cert_pem, key_pem.into_bytes());
-    let stream_tls = ClientTlsConfig::new().ca_certificate(ca).identity(id).domain_name("cerebro");
-    let stream_ch = match Endpoint::from_shared(grpc.clone())?.tls_config(stream_tls)?.connect().await {
+    let stream_tls = ClientTlsConfig::new()
+        .ca_certificate(ca)
+        .identity(id)
+        .domain_name("cerebro");
+    let stream_ch = match Endpoint::from_shared(grpc.clone())?
+        .tls_config(stream_tls)?
+        .connect()
+        .await
+    {
         Ok(c) => c,
         Err(e) => {
             tlsid::clear_identity();
@@ -240,7 +259,11 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel::<Envelope>(16);
     tx.send(env_msg(
         MsgType::Heartbeat,
-        Payload::Heartbeat(Heartbeat { active_leases: vec![], worker_hours_seconds: 0, workers: vec![] }),
+        Payload::Heartbeat(Heartbeat {
+            active_leases: vec![],
+            worker_hours_seconds: 0,
+            workers: vec![],
+        }),
     ))
     .await?;
     let lease_req = || {
@@ -255,7 +278,10 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     };
     tx.send(lease_req()).await?;
     // M3.1: leases extras p/ exercitar a trava max_workers (o cérebro nega os excedentes)
-    let extra: usize = env::var("APIFOR_EXTRA_LEASES").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let extra: usize = env::var("APIFOR_EXTRA_LEASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     for _ in 0..extra {
         tx.send(lease_req()).await?;
     }
@@ -297,7 +323,10 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
             }
             MsgType::LeaseDenied => {
                 if let Some(Payload::LeaseDenied(d)) = &env.payload {
-                    println!("LEASE NEGADO pelo cérebro: motivo={} (não vou trabalhar)", d.reason);
+                    println!(
+                        "LEASE NEGADO pelo cérebro: motivo={} (não vou trabalhar)",
+                        d.reason
+                    );
                 }
             }
             MsgType::LeaseRevoked => {
@@ -333,7 +362,10 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
             }
             MsgType::DispatchStep => {
                 if let Some(Payload::DispatchStep(ds)) = &env.payload {
-                    println!("DispatchStep kind={} task={} (workdir LOCAL)", ds.kind, ds.task_id);
+                    println!(
+                        "DispatchStep kind={} task={} (workdir LOCAL)",
+                        ds.kind, ds.task_id
+                    );
                     // kind: 2=exec 3=test 4=review 5=merge
                     let result: Result<serde_json::Value, String> = match ds.kind {
                         2 => exec::run(&ds.task_id, &ds.instructions, &vault)
@@ -351,7 +383,12 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                     let (msg_type, phase, output, error) = match result {
                         Ok(out) => {
                             println!("step kind={} ok: {out}", ds.kind);
-                            (MsgType::StepCompleted, StepPhase::Completed, out.to_string(), String::new())
+                            (
+                                MsgType::StepCompleted,
+                                StepPhase::Completed,
+                                out.to_string(),
+                                String::new(),
+                            )
                         }
                         Err(e) => {
                             eprintln!("step kind={} falhou: {e}", ds.kind);
@@ -380,7 +417,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                     if rp.prompt_template.contains("MEMÓRIA DA ORG") {
                         println!("relay: memória da org presente no prompt");
                     }
-                    let out = relay::plan(&workdir, &rp.prompt_template, &rp.context_refs, &vault).await;
+                    let out =
+                        relay::plan(&workdir, &rp.prompt_template, &rp.context_refs, &vault).await;
                     println!(
                         "plano pronto: {} passos, {} tokens, decisão={:?}",
                         out.steps.len(),
@@ -390,7 +428,11 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                     let steps = out
                         .steps
                         .iter()
-                        .map(|s| PlanStep { idx: s.idx, kind: s.kind, label: s.label.clone() })
+                        .map(|s| PlanStep {
+                            idx: s.idx,
+                            kind: s.kind,
+                            label: s.label.clone(),
+                        })
                         .collect();
                     tx.send(env_msg(
                         MsgType::PlanResult,

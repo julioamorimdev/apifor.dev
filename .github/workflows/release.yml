@@ -22,6 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: protoc (tonic-build, todos os OS)
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: deps do Linux (webkit/Tauri)
         if: matrix.os == 'ubuntu-22.04'
         run: |

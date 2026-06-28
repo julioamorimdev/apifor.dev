@@ -42,7 +42,8 @@ fn repo_path(task_id: &str) -> PathBuf {
 }
 
 fn base_dir() -> PathBuf {
-    PathBuf::from(std::env::var("APIFOR_HOME").unwrap_or_else(|_| "/var/lib/apifor".into())).join("work")
+    PathBuf::from(std::env::var("APIFOR_HOME").unwrap_or_else(|_| "/var/lib/apifor".into()))
+        .join("work")
 }
 
 /// Roda git num diretório e devolve stdout (erro = stderr).
@@ -74,7 +75,8 @@ fn authed_url(repo_url: &str, token: &Option<String>) -> String {
 }
 
 pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecResult, String> {
-    let instr: Instr = serde_json::from_str(instr_json).map_err(|e| format!("instr inválida: {e}"))?;
+    let instr: Instr =
+        serde_json::from_str(instr_json).map_err(|e| format!("instr inválida: {e}"))?;
     let gh_token = vault.get("github");
 
     // 1. workdir isolado por tarefa (limpa execução anterior)
@@ -85,8 +87,24 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
 
     // 2. clone (URL com token se for GitHub privado)
     let clone_url = authed_url(&instr.repo_url, &gh_token);
-    git(&work, &["clone", "--depth", "1", "-b", &instr.base_branch, &clone_url, repo.to_str().unwrap()])
-        .or_else(|_| git(&work, &["clone", "--depth", "1", &clone_url, repo.to_str().unwrap()]))?;
+    git(
+        &work,
+        &[
+            "clone",
+            "--depth",
+            "1",
+            "-b",
+            &instr.base_branch,
+            &clone_url,
+            repo.to_str().unwrap(),
+        ],
+    )
+    .or_else(|_| {
+        git(
+            &work,
+            &["clone", "--depth", "1", &clone_url, repo.to_str().unwrap()],
+        )
+    })?;
 
     // 3. branch novo
     git(&repo, &["checkout", "-b", &instr.branch])?;
@@ -94,7 +112,10 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
     // 4. agente coda (LOCAL): Anthropic com a chave do user, ou stub determinístico
     let summary = match vault.get("anthropic") {
         Some(key) => match code_with_llm(&key, &repo, &instr).await {
-            Ok(n) => format!("{n} arquivo(s) editado(s) pela Anthropic ({})", model_or(&instr)),
+            Ok(n) => format!(
+                "{n} arquivo(s) editado(s) pela Anthropic ({})",
+                model_or(&instr)
+            ),
             Err(e) => {
                 eprintln!("exec: coder LLM falhou ({e}); usando stub");
                 stub_code(&repo, &instr)
@@ -108,9 +129,13 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
     git(
         &repo,
         &[
-            "-c", "user.email=bot@apifor.dev",
-            "-c", "user.name=apifor bot",
-            "commit", "-m", &format!("apifor: {}", first_line(&instr.change_request)),
+            "-c",
+            "user.email=bot@apifor.dev",
+            "-c",
+            "user.name=apifor bot",
+            "commit",
+            "-m",
+            &format!("apifor: {}", first_line(&instr.change_request)),
         ],
     )?;
 
@@ -127,7 +152,10 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
         }
     };
 
-    Ok(ExecResult { branch: instr.branch, url })
+    Ok(ExecResult {
+        branch: instr.branch,
+        url,
+    })
 }
 
 fn first_line(s: &str) -> String {
@@ -157,7 +185,13 @@ pub fn run_test(task_id: &str, instr_json: &str) -> Result<(bool, String), Strin
                 .output()
                 .map_err(|e| e.to_string())?;
             let log = String::from_utf8_lossy(&out.stdout);
-            Ok((out.status.success(), format!("`{cmd}`: {}", log.trim().chars().take(160).collect::<String>())))
+            Ok((
+                out.status.success(),
+                format!(
+                    "`{cmd}`: {}",
+                    log.trim().chars().take(160).collect::<String>()
+                ),
+            ))
         }
         _ => Ok((true, "sem testes configurados (ok)".into())),
     }
@@ -165,13 +199,21 @@ pub fn run_test(task_id: &str, instr_json: &str) -> Result<(bool, String), Strin
 
 /// run_review — revisa o DIFF (fica local); só o veredicto vai ao cérebro.
 /// Anthropic com a chave do user (modelo do agente reviewer) ou stub.
-pub async fn run_review(task_id: &str, instr_json: &str, vault: &Vault) -> Result<(bool, String), String> {
+pub async fn run_review(
+    task_id: &str,
+    instr_json: &str,
+    vault: &Vault,
+) -> Result<(bool, String), String> {
     let instr: Instr = serde_json::from_str(instr_json).map_err(|e| e.to_string())?;
     let repo = repo_path(task_id);
     if !repo.exists() {
         return Err("workdir da tarefa ausente".into());
     }
-    let diff = git(&repo, &["diff", &format!("{}..{}", instr.base_branch, instr.branch)]).unwrap_or_default();
+    let diff = git(
+        &repo,
+        &["diff", &format!("{}..{}", instr.base_branch, instr.branch)],
+    )
+    .unwrap_or_default();
     if diff.trim().is_empty() {
         return Ok((false, "diff vazio — nada a revisar".into()));
     }
@@ -189,7 +231,12 @@ struct ReviewJson {
     comments: String,
 }
 
-async fn review_with_llm(key: &str, model: &str, change: &str, diff: &str) -> Result<(bool, String), String> {
+async fn review_with_llm(
+    key: &str,
+    model: &str,
+    change: &str,
+    diff: &str,
+) -> Result<(bool, String), String> {
     println!("reviewer: usando modelo {model}");
     let capped: String = diff.chars().take(12000).collect();
     let system = "Você é um revisor de código sênior. Avalie o diff frente ao pedido e \
@@ -246,8 +293,15 @@ pub fn run_merge(task_id: &str, instr_json: &str) -> Result<String, String> {
     git(
         &repo,
         &[
-            "-c", "user.email=bot@apifor.dev", "-c", "user.name=apifor bot",
-            "merge", "--no-ff", "-m", &msg, &instr.branch,
+            "-c",
+            "user.email=bot@apifor.dev",
+            "-c",
+            "user.name=apifor bot",
+            "merge",
+            "--no-ff",
+            "-m",
+            &msg,
+            &instr.branch,
         ],
     )?;
     git(&repo, &["push", "origin", &instr.base_branch])?;
@@ -284,7 +338,10 @@ async fn code_with_llm(key: &str, repo: &Path, instr: &Instr) -> Result<usize, S
             continue;
         }
         if let Ok(c) = std::fs::read_to_string(repo.join(f)) {
-            ctx.push_str(&format!("\n===== {f} (atual) =====\n{}\n", &c[..c.len().min(6000)]));
+            ctx.push_str(&format!(
+                "\n===== {f} (atual) =====\n{}\n",
+                &c[..c.len().min(6000)]
+            ));
         }
     }
     let system = "Você é um agente que escreve código. Receba um pedido e o conteúdo atual \
