@@ -46,6 +46,22 @@ export default function Config() {
 
       {tab === "workers" && (
         <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+            <div style={{ ...card, padding: 16, marginBottom: 0, border: "1px solid var(--accent)", boxShadow: "0 0 0 1px var(--accent), var(--shadow)", display: "flex", gap: 12 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>⇄</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><b>Pool</b><span style={{ marginLeft: "auto", width: 14, height: 14, borderRadius: 14, border: "4px solid var(--accent)" }} /></div>
+                <div style={{ color: "var(--dim)", fontSize: 12.5, marginTop: 3 }}>{t("Workers compartilhados com config global — qualquer um pega qualquer tarefa.", "Shared workers with global config — any one picks any task.")}</div>
+              </div>
+            </div>
+            <div style={{ ...card, padding: 16, marginBottom: 0, opacity: .65, display: "flex", gap: 12 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 9, background: "var(--elev)", color: "var(--mute)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>⊙</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><b>Pinned</b><span style={badge("queued")}>{t("em breve", "soon")}</span><span style={{ marginLeft: "auto", width: 14, height: 14, borderRadius: 14, border: "2px solid var(--border)" }} /></div>
+                <div style={{ color: "var(--mute)", fontSize: 12.5, marginTop: 3 }}>{t("Workers dedicados, criados e configurados um a um (máx. 8).", "Dedicated workers, created and configured one by one (max 8).")}</div>
+              </div>
+            </div>
+          </div>
           <div style={{ ...card, padding: 18, display: "flex", alignItems: "center", gap: 14 }}>
             <span style={{ position: "relative", width: 40, height: 40, borderRadius: 40, background: u && u.active_workers > 0 ? "var(--green-tint)" : "var(--border)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
               {u && u.active_workers > 0 && <span style={{ position: "absolute", inset: 6, borderRadius: 40, border: "2px solid var(--green)", animation: "pulsering 2.6s ease-out infinite" }} />}
