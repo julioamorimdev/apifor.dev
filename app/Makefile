@@ -4,7 +4,8 @@ SHELL := /bin/bash
         usage plan devices revoke enforce-demo \
         subscription invoices checkout billing-demo \
         interventions approve reject pipeline-demo ci qa telemetry \
-        members workspaces rbac-demo routines routines-demo
+        members workspaces rbac-demo routines routines-demo \
+        memories kb-import knowledge-demo
 
 dev: ; docker compose up --build
 
@@ -112,3 +113,9 @@ rbac-demo: ; @bash scripts/rbac-demo.sh                          # registro, pap
 # ── M5.2: rotinas (schedule/manual) ──
 routines: ; @curl -s http://localhost:8088/v1/routines; echo     # lista rotinas
 routines-demo: ; @bash scripts/routines-demo.sh                  # manual + schedule disparando sozinha
+
+# ── M5.3: memória & KB ──
+memories: ; @curl -s http://localhost:8088/v1/memories; echo     # lista memórias
+# importa um doc na KB local (valor em VALUE): make kb-import NAME=runbook.md CAT=runbook VALUE="..."
+kb-import: ; @docker compose exec -T -e VALUE="$(VALUE)" executor executor kb-import $(or $(NAME),doc.md) $(or $(CAT),doc)
+knowledge-demo: ; @bash scripts/knowledge-demo.sh               # memória injetada + KB via IPC

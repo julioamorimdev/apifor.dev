@@ -56,8 +56,30 @@ fn resolve_refs(workdir: &str, refs: &[String]) -> (String, Vec<String>) {
     (ctx, found)
 }
 
+/// Lê a KB local (APIFOR_HOME/kb/*) e devolve como contexto adicional (fica LOCAL).
+fn local_kb() -> String {
+    let home = std::env::var("APIFOR_HOME").unwrap_or_else(|_| "/var/lib/apifor".into());
+    let dir = std::path::Path::new(&home).join("kb");
+    let mut out = String::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten().take(10) {
+            if let Ok(mut c) = std::fs::read_to_string(e.path()) {
+                c.truncate(2000);
+                out.push_str(&format!("\n----- KB: {} -----\n{}\n", e.file_name().to_string_lossy(), c));
+            }
+        }
+    }
+    out
+}
+
 pub async fn plan(workdir: &str, template: &str, refs: &[String], vault: &Vault) -> PlanOut {
-    let (context, found) = resolve_refs(workdir, refs);
+    let (mut context, found) = resolve_refs(workdir, refs);
+    let kb = local_kb();
+    if !kb.is_empty() {
+        println!("relay: KB local anexada ao contexto");
+        context.push_str("\n===== BASE DE CONHECIMENTO (local) =====");
+        context.push_str(&kb);
+    }
 
     match vault.get("anthropic") {
         Some(key) => match call_anthropic(&key, template, &context).await {

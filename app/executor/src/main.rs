@@ -76,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.get(1).map(|s| s.as_str()) {
         Some("secret-put") => return cli_secret_put(&args).await,
         Some("secret-del") => return cli_secret_del(&args).await,
+        Some("kb-import") => return cli_kb_import(&args).await,
         Some("status") => return cli_status().await,
         _ => {}
     }
@@ -107,6 +108,26 @@ async fn cli_secret_put(args: &[String]) -> Result<(), Box<dyn std::error::Error
 async fn cli_secret_del(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let name = args.get(2).cloned().unwrap_or_default();
     let resp = ipc::call(serde_json::json!({"cmd": "secret.delete", "name": name})).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+async fn cli_kb_import(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let name = args.get(2).cloned().unwrap_or_default();
+    let category = args.get(3).cloned().unwrap_or_else(|| "doc".into());
+    let content = match env::var("VALUE") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            use std::io::Read;
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            s
+        }
+    };
+    let resp = ipc::call(serde_json::json!({
+        "cmd": "kb.import", "name": name, "category": category, "content": content
+    }))
+    .await?;
     println!("{resp}");
     Ok(())
 }
@@ -356,6 +377,9 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                         "RequestPlan: task={} refs={:?} — planejando LOCAL",
                         rp.task_id, rp.context_refs
                     );
+                    if rp.prompt_template.contains("MEMÓRIA DA ORG") {
+                        println!("relay: memória da org presente no prompt");
+                    }
                     let out = relay::plan(&workdir, &rp.prompt_template, &rp.context_refs, &vault).await;
                     println!(
                         "plano pronto: {} passos, {} tokens, decisão={:?}",

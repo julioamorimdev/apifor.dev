@@ -56,6 +56,9 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/prs", a.prs)               // GET lista pull requests
 	mux.HandleFunc("/v1/interventions", a.interventions)       // GET gates aguardando humano
 	mux.HandleFunc("/v1/interventions/", a.interventionAnswer) // POST /{taskID}/answer
+	mux.HandleFunc("/v1/memories", a.memories)                 // GET lista, POST cria (write)
+	mux.HandleFunc("/v1/memories/", a.memoryDelete)            // DELETE /{id}
+	mux.HandleFunc("/v1/kb-documents", a.kbDocs)               // GET lista, POST metadado (IPC)
 	mux.HandleFunc("/v1/routines", a.routines)                 // GET lista, POST cria (write)
 	mux.HandleFunc("/v1/routines/", a.routineAction)           // POST /{id}/run|enable|disable, DELETE /{id}
 	mux.HandleFunc("/v1/ci", a.ci)                             // GET ci_runs
@@ -307,10 +310,15 @@ func (a *API) createAndPlan(ctx context.Context, org, title, prompt string, refs
 	if err != nil {
 		return "", false, err
 	}
+	// M5.3: injeta a memória da org no prompt de planejamento.
+	planPrompt, nMem := a.DB.PromptWithMemory(ctx, org, repoID, prompt)
+	if nMem > 0 {
+		log.Printf("memória: %d instrução(ões) injetada(s) no plano de task=%s", nMem, taskID)
+	}
 	env := &apiforv1.Envelope{
 		Type: apiforv1.MsgType_REQUEST_PLAN,
 		Payload: &apiforv1.Envelope_RequestPlan{RequestPlan: &apiforv1.RequestPlan{
-			TaskId: taskID, PromptTemplate: prompt, ContextRefs: refs,
+			TaskId: taskID, PromptTemplate: planPrompt, ContextRefs: refs,
 		}},
 	}
 	dispatched := a.Hub.Send(org, env)
@@ -433,8 +441,16 @@ func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
 	if !a.requireCap(w, r, "write") {
 		return
 	}
-	var in struct{ Decision, Note string }
+	var in struct {
+		Decision, Note string
+		SaveMemory     bool `json:"save_memory"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
+	// M5.3: salvar a decisão como memória (reaproveita em casos similares).
+	if in.SaveMemory && in.Note != "" {
+		org := a.orgFrom(r)
+		_, _ = a.DB.CreateMemory(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), "global", "", in.Note, "intervention")
+	}
 	switch in.Decision {
 	case "approve":
 		if err := a.DB.ApproveHumanReview(r.Context(), taskID); err != nil {
@@ -452,6 +468,83 @@ func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, 400, errBody("bad_request", "decision: approve|reject"))
 	}
+}
+
+// memories: GET lista; POST cria memória (write). scope global|repo.
+func (a *API) memories(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "write") {
+			return
+		}
+		var in struct {
+			Scope       string `json:"scope"`
+			RepoID      string `json:"repo_id"`
+			Instruction string `json:"instruction"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Instruction == "" {
+			writeJSON(w, 400, errBody("bad_request", "instruction obrigatória"))
+			return
+		}
+		org := a.orgFrom(r)
+		id, err := a.DB.CreateMemory(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Scope, in.RepoID, in.Instruction, "manual")
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": id})
+		return
+	}
+	rows, err := a.DB.ListMemories(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) memoryDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, 405, errBody("method", "use DELETE"))
+		return
+	}
+	if !a.requireCap(w, r, "write") {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/memories/")
+	_ = a.DB.DeleteMemory(r.Context(), a.orgFrom(r), id)
+	writeJSON(w, 200, map[string]any{"id": id, "removed": true})
+}
+
+// kbDocs: GET lista; POST registra metadado de KB (o arquivo fica LOCAL, via IPC).
+func (a *API) kbDocs(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "write") {
+			return
+		}
+		var in struct {
+			Name     string `json:"name"`
+			Category string `json:"category"`
+			FileRef  string `json:"file_ref"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
+			writeJSON(w, 400, errBody("bad_request", "name obrigatório"))
+			return
+		}
+		org := a.orgFrom(r)
+		id, err := a.DB.CreateKBDoc(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Name, in.Category, in.FileRef)
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": id})
+		return
+	}
+	rows, err := a.DB.ListKBDocs(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
 }
 
 // routines: GET lista; POST cria (write). Trigger schedule (interval_sec) ou manual.

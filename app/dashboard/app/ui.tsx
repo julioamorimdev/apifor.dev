@@ -69,6 +69,7 @@ const TABS = [
   ["/qa", "QA"],
   ["/interventions", "Intervenção"],
   ["/telemetry", "Telemetria"],
+  ["/knowledge", "Conhecimento"],
   ["/usage", "Uso"],
   ["/invoices", "Faturas"],
   ["/org", "Organização"],

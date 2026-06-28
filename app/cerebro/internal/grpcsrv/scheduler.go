@@ -43,10 +43,11 @@ func (s *Server) fireRoutine(ctx context.Context, orgID, wspID string, a db.Rout
 		log.Printf("fireRoutine: %v", err)
 		return ""
 	}
+	planPrompt, _ := s.DB.PromptWithMemory(ctx, orgID, a.RepoID, a.Prompt) // M5.3
 	env := &apiforv1.Envelope{
 		Type: apiforv1.MsgType_REQUEST_PLAN,
 		Payload: &apiforv1.Envelope_RequestPlan{RequestPlan: &apiforv1.RequestPlan{
-			TaskId: taskID, PromptTemplate: a.Prompt, ContextRefs: a.Refs,
+			TaskId: taskID, PromptTemplate: planPrompt, ContextRefs: a.Refs,
 		}},
 	}
 	if s.Hub.Send(orgID, env) {

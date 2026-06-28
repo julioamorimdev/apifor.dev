@@ -85,6 +85,25 @@ async fn dispatch(line: &str, vault: &Arc<Vault>, http: &str) -> serde_json::Val
                 Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
             }
         }
+        "kb.import" => {
+            let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let category = req.get("category").and_then(|v| v.as_str()).unwrap_or("doc");
+            let content = req.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            if name.is_empty() || content.is_empty() {
+                return serde_json::json!({"ok": false, "error": "name e content obrigatórios"});
+            }
+            let home = std::env::var("APIFOR_HOME").unwrap_or_else(|_| "/var/lib/apifor".into());
+            let dir = std::path::Path::new(&home).join("kb");
+            let _ = std::fs::create_dir_all(&dir);
+            // sanitiza o nome (sem path traversal)
+            let safe: String = name.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
+            if std::fs::write(dir.join(&safe), content).is_err() {
+                return serde_json::json!({"ok": false, "error": "falha ao gravar KB local"});
+            }
+            let file_ref = format!("kb/{safe}");
+            let registered = register_kb_doc(http, name, category, &file_ref).await;
+            serde_json::json!({"ok": true, "file_ref": file_ref, "registered": registered})
+        }
         "status" | "daemon.status" => {
             let secrets: Vec<_> = vault
                 .list()
@@ -118,6 +137,33 @@ async fn register_secret_ref(http: &str, name: &str, kind: &str, fp: &str) -> bo
         .post(format!("{http}/v1/secrets"))
         .bearer_auth(lr.access_token)
         .json(&serde_json::json!({"name": name, "type": kind, "fingerprint": fp}))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Registra o metadado do KB no cérebro (o arquivo fica local).
+async fn register_kb_doc(http: &str, name: &str, category: &str, file_ref: &str) -> bool {
+    let client = reqwest::Client::new();
+    let lr: LoginResp = match client
+        .post(format!("{http}/v1/auth/login"))
+        .header("content-type", "application/json")
+        .body(DEMO_LOGIN)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+    {
+        Ok(r) => match r.json().await {
+            Ok(j) => j,
+            Err(_) => return false,
+        },
+        Err(_) => return false,
+    };
+    client
+        .post(format!("{http}/v1/kb-documents"))
+        .bearer_auth(lr.access_token)
+        .json(&serde_json::json!({"name": name, "category": category, "file_ref": file_ref}))
         .send()
         .await
         .map(|r| r.status().is_success())

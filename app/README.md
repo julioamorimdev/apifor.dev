@@ -221,8 +221,25 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   background no cérebro; enable/disable/delete. Tela **Rotinas**. Validado e2e (schedule
   redispara, manual cria, disable para). *event* fica anotado p/ depois.
 
-**M3 e M4 completos; M5 em curso.** Próximo: **M5.3** (memória & KB),
-**M5.4** (notificações) ou hardening (M6).
+- **M5.3** — **memória & KB**: memória da org (escopo **global/repo**) **injetada no
+  prompt de planejamento**; KB importada via **IPC `kb.import`** (arquivo fica local,
+  metadado no cérebro) e **consultada pelo agente** no relay (lê a KB local). `save_memory`
+  na intervenção salva a decisão como memória. Tela **Conhecimento**. Validado e2e.
+
+**M3 e M4 completos; M5 em curso.** Próximo: **M5.4** (notificações) ou hardening (M6).
+
+## Memória & KB (M5.3)
+
+```bash
+make knowledge-demo                          # memória injetada + KB via IPC
+make memories                                # lista memórias
+make kb-import NAME=runbook.md CAT=runbook VALUE="conteúdo..."   # importa KB local
+```
+
+Memória guia os agentes (o cérebro prepende as instruções da org ao plano). KB: o
+**arquivo fica local** (`executor kb-import`), só o metadado (`kb_document`) vai ao
+cérebro; o relay lê a KB local e a anexa ao contexto de planejamento. REST:
+`GET|POST /v1/memories`, `DELETE /v1/memories/{id}`, `GET|POST /v1/kb-documents`.
 
 ## Rotinas (M5.2)
 

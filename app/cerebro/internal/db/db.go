@@ -113,6 +113,109 @@ func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	return &u, err
 }
 
+// ── M5.3: memória (guia os agentes) + KB (metadado; arquivo local) ──
+
+func (d *DB) CreateMemory(ctx context.Context, orgID, wspID, scope, repoID, instruction, source string) (string, error) {
+	id := NewID("mem")
+	var rid *string
+	if scope == "repo" && repoID != "" {
+		rid = &repoID
+	} else {
+		scope = "global"
+	}
+	_, err := d.Pool.Exec(ctx, `INSERT INTO memory(id,org_id,workspace_id,scope,repo_id,instruction,source)
+		VALUES($1,$2,$3,$4,$5,$6,$7)`, id, orgID, wspID, scope, rid, instruction, source)
+	return id, err
+}
+
+func (d *DB) ListMemories(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,scope::text,COALESCE(repo_id,''),instruction,source::text
+		FROM memory WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, scope, repo, instr, src string
+		if err := rows.Scan(&id, &scope, &repo, &instr, &src); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "scope": scope, "repo_id": repo, "instruction": instr, "source": src})
+	}
+	return out, rows.Err()
+}
+
+// MemoriesForTask devolve as instruções aplicáveis (global + as do repo) — p/ injetar no plano.
+func (d *DB) MemoriesForTask(ctx context.Context, orgID, repoID string) ([]string, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT instruction FROM memory
+		WHERE org_id=$1 AND (scope='global' OR (scope='repo' AND repo_id=$2)) ORDER BY created_at`, orgID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) DeleteMemory(ctx context.Context, orgID, id string) error {
+	_, err := d.Pool.Exec(ctx, `DELETE FROM memory WHERE id=$1 AND org_id=$2`, id, orgID)
+	return err
+}
+
+// PromptWithMemory prepende a memória da org (global + repo) ao pedido. Retorna (prompt, n).
+func (d *DB) PromptWithMemory(ctx context.Context, orgID, repoID, prompt string) (string, int) {
+	mems, _ := d.MemoriesForTask(ctx, orgID, repoID)
+	if len(mems) == 0 {
+		return prompt, 0
+	}
+	var b strings.Builder
+	b.WriteString("MEMÓRIA DA ORG (siga estas instruções):\n")
+	for _, m := range mems {
+		b.WriteString("- " + m + "\n")
+	}
+	b.WriteString("\nPEDIDO:\n" + prompt)
+	return b.String(), len(mems)
+}
+
+func (d *DB) CreateKBDoc(ctx context.Context, orgID, wspID, name, category, fileRef string) (string, error) {
+	id := NewID("kb")
+	switch category {
+	case "doc", "guide", "spec", "runbook", "reference":
+	default:
+		category = "doc"
+	}
+	_, err := d.Pool.Exec(ctx, `INSERT INTO kb_document(id,org_id,workspace_id,name,category,file_ref,indexed)
+		VALUES($1,$2,$3,$4,$5,$6,true)`, id, orgID, wspID, name, category, fileRef)
+	return id, err
+}
+
+func (d *DB) ListKBDocs(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,name,category::text,COALESCE(file_ref,''),indexed
+		FROM kb_document WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, name, cat, ref string
+		var idx bool
+		if err := rows.Scan(&id, &name, &cat, &ref, &idx); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "name": name, "category": cat, "file_ref": ref, "indexed": idx})
+	}
+	return out, rows.Err()
+}
+
 // ── M5.2: rotinas (schedule/manual -> cria tarefa) ──
 
 // RoutineAction é o que a rotina dispara (espelha o POST /v1/tasks).
