@@ -475,8 +475,8 @@ function Sidebar() {
             {g.items.map(([href, label, key]) => {
               const active = path === href;
               return (
-                <a key={href} href={href} className={active ? "" : "apf-link"}
-                  style={{ position: "relative", display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, color: active ? "var(--ink)" : "var(--dim)", background: active ? "var(--elev)" : "transparent", fontWeight: active ? 600 : 500 }}>
+                <a key={href} href={href} className={active ? "" : "apf-navitem"}
+                  style={{ position: "relative", display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, fontWeight: active ? 600 : 500, ...(active ? { color: "var(--ink)", background: "var(--elev)" } : {}) }}>
                   {active && <span style={{ position: "absolute", left: 0, top: 7, bottom: 7, width: 3, borderRadius: 3, background: "var(--accent)" }} />}
                   <Ico name={href} color={active ? "var(--accent)" : "var(--mute)"} />
                   {navLabel(lang, href, label)}
