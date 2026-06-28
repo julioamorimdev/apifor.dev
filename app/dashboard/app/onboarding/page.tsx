@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Page, PageHead, apiPost, badge, btn, card, getToken, input } from "../ui";
+import { apiPost, badge, btn, card, getToken, input, Page, PageHead, useT } from "../ui";
 
 function Step({ n, title, children, done }: { n: number; title: string; children: React.ReactNode; done?: boolean }) {
   return (
@@ -14,10 +14,11 @@ function Step({ n, title, children, done }: { n: number; title: string; children
   );
 }
 const Cmd = ({ children }: { children: React.ReactNode }) => (
-  <pre style={{ background: "var(--accent-ink)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: 13, color: "var(--ink)" }}>{children}</pre>
+  <pre style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: 13, color: "var(--ink)" }}>{children}</pre>
 );
 
 export default function Onboarding() {
+  const t = useT();
   const logged = !!getToken();
   const [repo, setRepo] = useState({ name: "", url: "" });
   const [repoOk, setRepoOk] = useState(false);
@@ -28,38 +29,38 @@ export default function Onboarding() {
   }
   return (
     <Page>
-
       <PageHead eyebrow="Início" title="Bem-vindo ao apifor.dev" subtitle="4 passos pra primeira tarefa." />
-      <Step n={1} title="Crie sua conta" done={logged}>
-        {logged ? <span style={badge("merged")}>conectado</span> : <>Crie a org e entre em <a href="/login" style={{ color: "var(--blue)" }}>/login</a>.</>}
+
+      <Step n={1} title={t("Crie sua conta", "Create your account")} done={logged}>
+        {logged ? <span style={badge("merged")}>{t("conectado", "connected")}</span> : <>{t("Crie a org e entre em", "Create the org and sign in at")} <a href="/login" style={{ color: "var(--blue)" }}>/login</a>.</>}
       </Step>
 
-      <Step n={2} title="Deixe o executor rodando (na sua máquina/VM)">
-        O executor é o <b>data plane local</b> — ele roda os workers de IA. Instale como serviço de fundo:
+      <Step n={2} title={t("Deixe o executor rodando (na sua máquina/VM)", "Keep the executor running (on your machine/VM)")}>
+        {t("O executor é o data plane local — ele roda os workers de IA. Instale como serviço de fundo:", "The executor is the local data plane — it runs the AI workers. Install it as a background service:")}
         <Cmd>{`# Linux/macOS (build + registra o serviço)
 sudo app/deploy/install.sh
 # ou via Docker (dev):  cd app && make dev`}</Cmd>
-        Ele enrola sozinho no cérebro por mTLS (CSR assinado pela CA).
+        {t("Ele enrola sozinho no cérebro por mTLS (CSR assinado pela CA).", "It enrolls into the brain by itself via mTLS (CSR signed by the CA).")}
       </Step>
 
-      <Step n={3} title="Configure sua chave de IA — local, nunca no cérebro">
-        A chave fica no <b>vault cifrado local</b> via IPC. Ela <b>nunca</b> trafega pela rede nem é digitada aqui:
+      <Step n={3} title={t("Configure sua chave de IA — local, nunca no cérebro", "Set your AI key — local, never in the brain")}>
+        {t("A chave fica no vault cifrado local via IPC. Ela nunca trafega pela rede nem é digitada aqui:", "The key lives in the local encrypted vault via IPC. It never travels the network nor is typed here:")}
         <Cmd>{`VALUE="sk-ant-..." app/.../executor secret-put anthropic_api_key
 # (ou: make secret NAME=anthropic_api_key VALUE=sk-ant-...)`}</Cmd>
       </Step>
 
-      <Step n={4} title="Conecte um repositório" done={repoOk}>
+      <Step n={4} title={t("Conecte um repositório", "Connect a repository")} done={repoOk}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <input style={{ ...input, width: 160 }} placeholder="nome" value={repo.name} onChange={(e) => setRepo({ ...repo, name: e.target.value })} />
+          <input style={{ ...input, width: 160 }} placeholder={t("nome", "name")} value={repo.name} onChange={(e) => setRepo({ ...repo, name: e.target.value })} />
           <input style={{ ...input, flex: 1, minWidth: 200 }} placeholder="clone_url (https/ssh/file://)" value={repo.url} onChange={(e) => setRepo({ ...repo, url: e.target.value })} />
-          <button style={btn} onClick={addRepo} disabled={!logged}>conectar</button>
-          {repoOk && <span style={badge("merged")}>repositório conectado</span>}
+          <button style={btn} onClick={addRepo} disabled={!logged}>{t("conectar", "connect")}</button>
+          {repoOk && <span style={badge("merged")}>{t("repositório conectado", "repository connected")}</span>}
         </div>
       </Step>
 
       <div style={{ ...card, padding: 16, borderColor: "var(--accent)" }}>
-        Pronto! Crie sua primeira tarefa na <a href="/queue" style={{ color: "var(--accent)" }}>Fila</a> e acompanhe ao vivo no{" "}
-        <a href="/" style={{ color: "var(--accent)" }}>Live</a>. Precisa de mais workers/horas? Veja <a href="/pricing" style={{ color: "var(--accent)" }}>Planos</a>.
+        {t("Pronto! Crie sua primeira tarefa na", "Done! Create your first task in")} <a href="/queue" style={{ color: "var(--accent)" }}>{t("Fila", "Queue")}</a> {t("e acompanhe ao vivo no", "and watch it live in")}{" "}
+        <a href="/live" style={{ color: "var(--accent)" }}>Live</a>. {t("Precisa de mais workers/horas? Veja", "Need more workers/hours? See")} <a href="/pricing" style={{ color: "var(--accent)" }}>{t("Planos", "Plans")}</a>.
       </div>
     </Page>
   );

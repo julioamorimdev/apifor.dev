@@ -104,6 +104,12 @@ const TR: Record<string, string> = {
   "CI falhou": "CI failed", "Falhou": "Failed", "OK": "OK",
 };
 const tr = (lang: string, s?: string) => (lang === "en" && s ? TR[s] || s : s);
+
+// hook p/ traduzir strings inline nas páginas: t("PT") usa o dicionário, ou t("PT","EN").
+export function useT() {
+  const [lang] = useLang();
+  return useCallback((pt: string, en?: string) => (lang === "en" ? (en ?? TR[pt] ?? pt) : pt), [lang]);
+}
 const navLabel = (lang: string, href: string, pt: string) => (lang === "en" ? EN_LABEL[href] || pt : pt);
 
 // ───────────────────────── tokens de estilo (CSS vars) ─────────────────────────
