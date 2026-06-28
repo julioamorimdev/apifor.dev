@@ -6,12 +6,18 @@ SHELL := /bin/bash
         interventions approve reject pipeline-demo ci qa telemetry \
         members workspaces rbac-demo routines routines-demo \
         memories kb-import knowledge-demo notifications \
-        audit metrics hardening-demo ci-smoke
+        audit metrics hardening-demo ci-smoke prod-up prod-down prod-posture
 
 dev: ; docker compose up --build
 
 # checagens determinísticas do CI (e2e + RLS + RBAC + privilégio)
 ci-smoke: ; @bash scripts/ci-smoke.sh
+
+# produção (override endurecido: REQUIRE_AUTH, SEED_DEMO=false, REST_TLS, ...)
+PROD := docker compose -f docker-compose.yml -f docker-compose.prod.yml
+prod-up: ; $(PROD) up -d --build
+prod-down: ; $(PROD) down -v
+prod-posture: ; @bash scripts/prod-posture.sh   # valida a postura endurecida
 
 up: ; docker compose up -d --build
 

@@ -37,6 +37,7 @@ Travas (lease, limite de workers, 36h/sem, kill-switch) são **server-side** —
 | [API.md](API.md) | REST `/v1` + IPC local |
 | [ROADMAP.md](ROADMAP.md) | marcos de construção M0→M7 |
 | [SECURITY.md](SECURITY.md) | review de segurança (mTLS, vault, kill-switch, RBAC, RLS) |
+| [PRODUCTION.md](PRODUCTION.md) | deploy de produção (perfil endurecido + checklist) |
 
 ## Contratos (`contracts/`)
 

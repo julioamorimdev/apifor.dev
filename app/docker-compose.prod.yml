@@ -1,0 +1,23 @@
+# Override de PRODUÇÃO — liga toda a postura endurecida.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Requer: JWT_SECRET forte exportado (>= 32 bytes). Opcional: STRIPE_WEBHOOK_SECRET.
+services:
+  cerebro:
+    environment:
+      # auth obrigatória (fecha o fallback dev "demo owner")
+      REQUIRE_AUTH: "true"
+      # não cria o usuário/org demo
+      SEED_DEMO: "false"
+      # segredo do JWT — obrigatório e forte (compose falha se ausente)
+      JWT_SECRET: "${JWT_SECRET:?defina um JWT_SECRET forte (>=32 bytes) em producao}"
+      # TLS no REST/SSE: emite cert da CA interna (ou troque por REST_TLS_CERT/KEY)
+      REST_TLS: "true"
+      REST_TLS_HOSTS: "${REST_TLS_HOSTS:-localhost,127.0.0.1,cerebro}"
+      # gate de merge: exige revisão humana antes do merge
+      MERGE_REQUIRE_HUMAN: "true"
+      # billing: verificação real do webhook
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+
+  # a GUI em produção é o export estático (servido por CDN/desktop), não o dev server
+  dashboard:
+    profiles: ["dev-only"]
