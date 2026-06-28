@@ -35,6 +35,9 @@ A fronteira de privacidade é a invariante central:
   com neutralização de injeção de fórmula.
 - **Webhook Stripe** — verificação **HMAC-SHA256 real** (esquema do Stripe) com
   tolerância de timestamp; sem segredo configurado → 400 (sem bypass).
+- **TLS no REST/SSE (opt-in)** — `REST_TLS=true` serve o REST sobre HTTPS com cert
+  emitido pela CA interna (ou `REST_TLS_CERT/KEY` p/ cert real). Plaintext é rejeitado.
+  Default off em dev (a GUI usa o proxy `/api`).
 - **Defensivas** — SQL 100% parametrizado; JWT com **alg pinning** (HMAC); guards de
   path traversal (`..`) em refs/exec/merge; sanitização do nome no `kb.import`.
 
@@ -59,4 +62,4 @@ A fronteira de privacidade é a invariante central:
 - [ ] `JWT_SECRET` forte (≥ 32 bytes aleatórios) · [ ] `REQUIRE_AUTH=true`
 - [x] Seed demo gateável (`SEED_DEMO=false`) · [ ] `STRIPE_WEBHOOK_SECRET` configurado
 - [x] Enforcement de RLS (reads/creates/updates/deletes via `apifor_app`; runtime sem superuser) · [ ] CA/`vault.key` em KMS/secret store
-- [ ] TLS no HTTP REST (hoje só o gRPC é mTLS; o REST/SSE é texto) · [ ] mTLS bootstrap sem `GET /v1/ca` em claro
+- [x] TLS no REST/SSE disponível (`REST_TLS=true` via CA interna, ou `REST_TLS_CERT/KEY` p/ cert real) · [ ] mTLS bootstrap sem `GET /v1/ca` em claro
