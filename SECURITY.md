@@ -49,7 +49,7 @@ A fronteira de privacidade é a invariante central:
 | **Pipeline writes (gRPC)** | `SaveExecResult`/`SetCIResult`/`MarkMerged`/`FailTask` seguem no pool `apifor_worker` (BYPASSRLS) — org derivada do **device autenticado por mTLS**, não de input do user. | Opcional: contexto de org explícito também no caminho gRPC. |
 | **Credenciais demo** | `demo@apifor.dev/demo` seedado; `JWT_SECRET` padrão fraco (aviso no boot). | Remover o seed demo e exigir `JWT_SECRET` forte em produção. |
 | **`REQUIRE_AUTH`** | default **off** (demos funcionam sem token). | Ligar (`REQUIRE_AUTH=true`) em produção. |
-| **IPC** | Unix socket sem token de processo. | Adicionar token de processo + perms do dir 0700 (protocolo §17). |
+| **IPC** | ✅ **Feito** — Unix socket **0600** + **token de processo** (`ipc.token` 0600, gerado na 1ª subida); toda chamada exige o token (barra outros processos locais). A CLI lê o token do keystore; chamada sem/errado → rejeitada. | — |
 | **SSE + auth** | `EventSource` não envia header `Authorization`; streams ficam fora do gate. | Token via query/cookie httpOnly para streams. |
 | **Cloud workers / SSO-SAML** | Não implementados (infra/IdP externos). | M6.2+ com provider real. |
 | **Renovação de cert / graça 5min** | Parciais. | Renovação antes de expirar; pausa graceful no heartbeat ausente. |
