@@ -97,18 +97,128 @@ func (d *DB) GetAgentModel(ctx context.Context, key string) string {
 }
 
 type User struct {
-	ID, Email, Hash, OrgID string
+	ID, Email, Hash, OrgID, Role string
 }
 
 func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	var u User
-	err := d.Pool.QueryRow(ctx, `SELECT u.id,u.email,COALESCE(u.password_hash,''),COALESCE(m.org_id,'')
-		FROM app_user u LEFT JOIN membership m ON m.user_id=u.id WHERE u.email=$1 LIMIT 1`, email).
-		Scan(&u.ID, &u.Email, &u.Hash, &u.OrgID)
+	err := d.Pool.QueryRow(ctx, `SELECT u.id,u.email,COALESCE(u.password_hash,''),COALESCE(m.org_id,''),COALESCE(m.permission_tier::text,'')
+		FROM app_user u LEFT JOIN membership m ON m.user_id=u.id WHERE u.email=$1
+		ORDER BY m.created_at LIMIT 1`, email).
+		Scan(&u.ID, &u.Email, &u.Hash, &u.OrgID, &u.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	return &u, err
+}
+
+// ── M5.1: multi-tenant (org/workspace/membership) + RBAC ──
+
+// RegisterOrg cria user + org (Free) + membership owner + workspace + pool_config.
+func (d *DB) RegisterOrg(ctx context.Context, email, name, hash, orgName string) (userID, orgID string, err error) {
+	userID, orgID = NewID("usr"), NewID("org")
+	wsp := NewID("wsp")
+	b := d.Pool
+	if _, err = b.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,$3,$4)`, userID, email, name, hash); err != nil {
+		return
+	}
+	if _, err = b.Exec(ctx, `INSERT INTO org(id,name,owner_user_id,plan) VALUES($1,$2,$3,'free')`, orgID, orgName, userID); err != nil {
+		return
+	}
+	if _, err = b.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier,status) VALUES($1,$2,$3,'owner','active')`, NewID("mbr"), orgID, userID); err != nil {
+		return
+	}
+	if _, err = b.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,'Principal','P')`, wsp, orgID); err != nil {
+		return
+	}
+	_, err = b.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,1,2)`, NewID("pcfg"), wsp)
+	return
+}
+
+func (d *DB) EmailExists(ctx context.Context, email string) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM app_user WHERE email=$1)`, email).Scan(&ok)
+	return ok, err
+}
+
+// AddMember cria o usuário (se novo) e o vincula à org com o papel dado.
+func (d *DB) AddMember(ctx context.Context, orgID, email, name, hash, role string) (string, error) {
+	var userID string
+	err := d.Pool.QueryRow(ctx, `SELECT id FROM app_user WHERE email=$1`, email).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		userID = NewID("usr")
+		if _, err = d.Pool.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,$3,$4)`, userID, email, name, hash); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+	_, err = d.Pool.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier,status)
+		VALUES($1,$2,$3,$4,'active') ON CONFLICT (org_id,user_id) DO UPDATE SET permission_tier=EXCLUDED.permission_tier,status='active'`,
+		NewID("mbr"), orgID, userID, role)
+	return userID, err
+}
+
+func (d *DB) ListMembers(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT m.id,u.email,COALESCE(u.name,''),m.permission_tier::text,m.status::text
+		FROM membership m JOIN app_user u ON u.id=m.user_id WHERE m.org_id=$1 ORDER BY m.created_at`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, email, name, role, st string
+		if err := rows.Scan(&id, &email, &name, &role, &st); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "email": email, "name": name, "role": role, "status": st})
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) RemoveMember(ctx context.Context, orgID, membershipID string) error {
+	_, err := d.Pool.Exec(ctx, `DELETE FROM membership WHERE id=$1 AND org_id=$2 AND permission_tier<>'owner'`, membershipID, orgID)
+	return err
+}
+
+func (d *DB) CreateWorkspace(ctx context.Context, orgID, name string) (string, error) {
+	id := NewID("wsp")
+	init := "W"
+	if name != "" {
+		init = strings.ToUpper(name[:1])
+	}
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,$3,$4)`, id, orgID, name, init); err != nil {
+		return "", err
+	}
+	_, err := d.Pool.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,1,2)`, NewID("pcfg"), id)
+	return id, err
+}
+
+func (d *DB) ListWorkspaces(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,name,COALESCE(initial,'') FROM workspace WHERE org_id=$1 ORDER BY created_at`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, name, init string
+		if err := rows.Scan(&id, &name, &init); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "name": name, "initial": init})
+	}
+	return out, rows.Err()
+}
+
+// FirstWorkspace devolve o workspace default da org (p/ escopar tarefas/repos).
+func (d *DB) FirstWorkspace(ctx context.Context, orgID string) string {
+	var id string
+	if err := d.Pool.QueryRow(ctx, `SELECT id FROM workspace WHERE org_id=$1 ORDER BY created_at LIMIT 1`, orgID).Scan(&id); err != nil {
+		return DemoWspID
+	}
+	return id
 }
 
 // Device (M1: token simples no cert_serial; mTLS depois).

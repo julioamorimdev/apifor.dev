@@ -210,4 +210,26 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   e `qa_report`; REST `GET /v1/ci` `/v1/qa` `/v1/telemetry` + telas no dashboard.
   Validado e2e (CI passed, QA 1/1, telemetria agregada).
 
-**M3 e M4 completos.** Próximo: **M5** (multi-tenant/Team) ou hardening (M6).
+- **M5.1** — **multi-tenant & RBAC**: registro self-service (user+org+owner), **papéis**
+  (owner/admin/member/billing/viewer) aplicados **server-side** por capacidade
+  (read/write/manage/billing), **isolamento por org**, membros e workspaces. Login com JWT
+  (org+role); tela **Organização** (login/registro, membros, workspaces). Validado e2e:
+  viewer barrado em write/manage/billing; Org B não vê dados da Org A.
+
+**M3 e M4 completos; M5 em curso.** Próximo: **M5.2** (rotinas schedule/event/manual),
+**M5.3** (memória & KB), **M5.4** (notificações) ou hardening (M6).
+
+## Multi-tenant & RBAC (M5.1)
+
+```bash
+make rbac-demo             # registro, papéis (viewer barrado), isolamento por org
+make members              # membros da org
+make workspaces           # workspaces da org
+```
+
+Auth: `POST /v1/auth/register` (cria org + owner), `POST /v1/auth/login` → JWT com
+`org`+`role`. RBAC por capacidade: **read** (todos), **write** (owner/admin/member —
+tarefas, intervenção, segredos), **manage** (owner/admin — repos, membros, workspaces,
+kill-switch), **billing** (owner/billing — plano, checkout). Sem token = fallback dev
+(demo como owner, p/ as demos antigas seguirem funcionando). REST: `/v1/me`,
+`GET|POST /v1/members`, `DELETE /v1/members/{id}`, `GET|POST /v1/workspaces`.

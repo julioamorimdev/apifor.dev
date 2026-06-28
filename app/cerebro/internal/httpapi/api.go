@@ -43,6 +43,11 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/healthz", a.health)
 	mux.HandleFunc("/v1/ca", a.caCert) // bootstrap público da CA (mTLS)
 	mux.HandleFunc("/v1/auth/login", a.login)
+	mux.HandleFunc("/v1/auth/register", a.register)
+	mux.HandleFunc("/v1/members", a.members)        // GET lista, POST adiciona (manage)
+	mux.HandleFunc("/v1/members/", a.memberRemove)  // DELETE /{id} (manage)
+	mux.HandleFunc("/v1/workspaces", a.workspaces)  // GET lista, POST cria (manage)
+	mux.HandleFunc("/v1/me", a.me)                  // GET org/papel atual
 	mux.HandleFunc("/v1/workers", a.workers)
 	mux.HandleFunc("/v1/tasks", a.tasks)           // GET lista, POST cria (dispara relay)
 	mux.HandleFunc("/v1/tasks/", a.taskSteps)      // GET /v1/tasks/{id}/steps
@@ -88,20 +93,164 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, errBody("unauthorized", "credenciais inválidas"))
 		return
 	}
-	tok, err := a.Auth.Issue(u.ID, u.OrgID, 15*time.Minute)
+	role := u.Role
+	if role == "" {
+		role = "owner"
+	}
+	tok, err := a.Auth.Issue(u.ID, u.OrgID, role, 15*time.Minute)
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", "falha ao emitir token"))
 		return
 	}
-	writeJSON(w, 200, map[string]string{"access_token": tok, "org_id": u.OrgID})
+	writeJSON(w, 200, map[string]string{"access_token": tok, "org_id": u.OrgID, "role": role})
 }
 
-func (a *API) orgFrom(r *http.Request) string {
-	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if c, err := a.Auth.Parse(t); err == nil {
-		return c.OrgID
+// register: cria user + org (Free) + membership owner. Onboarding self-service.
+func (a *API) register(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Email, Password, Name, Org string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Email == "" || in.Password == "" {
+		writeJSON(w, 400, errBody("bad_request", "email e password obrigatórios"))
+		return
 	}
-	return db.DemoOrgID // M1: cai no demo se não autenticado
+	if exists, _ := a.DB.EmailExists(r.Context(), in.Email); exists {
+		writeJSON(w, 409, errBody("conflict", "email já cadastrado"))
+		return
+	}
+	hash, _ := auth.HashPassword(in.Password)
+	orgName := in.Org
+	if orgName == "" {
+		orgName = in.Email + "'s org"
+	}
+	uid, oid, err := a.DB.RegisterOrg(r.Context(), in.Email, in.Name, hash, orgName)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	tok, _ := a.Auth.Issue(uid, oid, "owner", 15*time.Minute)
+	writeJSON(w, 201, map[string]string{"access_token": tok, "org_id": oid, "role": "owner"})
+}
+
+// authz extrai (userID, orgID, role) do JWT. Sem token válido cai no demo (dev) como owner.
+func (a *API) authz(r *http.Request) (userID, orgID, role string) {
+	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if c, err := a.Auth.Parse(t); err == nil && c.OrgID != "" {
+		role = c.Role
+		if role == "" {
+			role = "member"
+		}
+		return c.Subject, c.OrgID, role
+	}
+	return db.DemoUserID, db.DemoOrgID, "owner"
+}
+
+func (a *API) orgFrom(r *http.Request) string { _, org, _ := a.authz(r); return org }
+
+// can resolve o RBAC por capacidade.
+func can(role, cap string) bool {
+	switch cap {
+	case "read":
+		return true
+	case "write": // criar tarefa, aprovar intervenção, segredos
+		return role == "owner" || role == "admin" || role == "member"
+	case "manage": // membros, workspaces, repos, kill-switch
+		return role == "owner" || role == "admin"
+	case "billing": // plano, checkout, portal
+		return role == "owner" || role == "billing"
+	}
+	return false
+}
+
+// requireCap responde 403 e devolve false se o papel não tem a capacidade.
+func (a *API) requireCap(w http.ResponseWriter, r *http.Request, cap string) bool {
+	_, _, role := a.authz(r)
+	if !can(role, cap) {
+		writeJSON(w, 403, errBody("forbidden", "papel '"+role+"' sem permissão p/ '"+cap+"'"))
+		return false
+	}
+	return true
+}
+
+// me: org + papel do token atual.
+func (a *API) me(w http.ResponseWriter, r *http.Request) {
+	uid, org, role := a.authz(r)
+	writeJSON(w, 200, map[string]string{"user_id": uid, "org_id": org, "role": role})
+}
+
+// members: GET lista; POST adiciona membro (manage). Não cria owner por aqui.
+func (a *API) members(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "manage") {
+			return
+		}
+		var in struct{ Email, Password, Name, Role string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Email == "" || in.Password == "" {
+			writeJSON(w, 400, errBody("bad_request", "email e password obrigatórios"))
+			return
+		}
+		switch in.Role {
+		case "admin", "member", "billing", "viewer":
+		default:
+			writeJSON(w, 400, errBody("bad_request", "role: admin|member|billing|viewer"))
+			return
+		}
+		hash, _ := auth.HashPassword(in.Password)
+		id, err := a.DB.AddMember(r.Context(), a.orgFrom(r), in.Email, in.Name, hash, in.Role)
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 201, map[string]any{"user_id": id, "role": in.Role})
+		return
+	}
+	rows, err := a.DB.ListMembers(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) memberRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, 405, errBody("method", "use DELETE"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/members/")
+	if err := a.DB.RemoveMember(r.Context(), a.orgFrom(r), id); err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "removed": true})
+}
+
+// workspaces: GET lista; POST cria (manage).
+func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "manage") {
+			return
+		}
+		var in struct{ Name string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
+			writeJSON(w, 400, errBody("bad_request", "name obrigatório"))
+			return
+		}
+		id, err := a.DB.CreateWorkspace(r.Context(), a.orgFrom(r), in.Name)
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": id})
+		return
+	}
+	rows, err := a.DB.ListWorkspaces(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
 }
 
 func (a *API) workers(w http.ResponseWriter, r *http.Request) {
@@ -138,8 +287,11 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errBody("bad_request", "title e prompt obrigatórios"))
 		return
 	}
+	if !a.requireCap(w, r, "write") {
+		return
+	}
 	org := a.orgFrom(r)
-	taskID, err := a.DB.CreateRealTask(r.Context(), org, db.DemoWspID, in.Title, in.Prompt, in.RepoID)
+	taskID, err := a.DB.CreateRealTask(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Title, in.Prompt, in.RepoID)
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -183,6 +335,9 @@ func (a *API) taskSteps(w http.ResponseWriter, r *http.Request) {
 // secrets: GET lista metadados; POST registra um secret_ref (sem valor).
 func (a *API) secrets(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "write") {
+			return
+		}
 		var in struct{ Name, Type, Fingerprint string }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
 			writeJSON(w, 400, errBody("bad_request", "name obrigatório"))
@@ -216,10 +371,14 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, errBody("bad_request", "name e clone_url obrigatórios"))
 			return
 		}
+		if !a.requireCap(w, r, "manage") {
+			return
+		}
 		if in.DefaultBranch == "" {
 			in.DefaultBranch = "main"
 		}
-		id, err := a.DB.CreateRepo(r.Context(), a.orgFrom(r), db.DemoWspID, in.Name, in.CloneURL, in.DefaultBranch)
+		org := a.orgFrom(r)
+		id, err := a.DB.CreateRepo(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Name, in.CloneURL, in.DefaultBranch)
 		if err != nil {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
@@ -262,6 +421,9 @@ func (a *API) interventionAnswer(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimSuffix(path, "/answer")
 	if r.Method != http.MethodPost || taskID == "" || taskID == path {
 		writeJSON(w, 404, errBody("not_found", "use POST /v1/interventions/{taskID}/answer"))
+		return
+	}
+	if !a.requireCap(w, r, "write") {
 		return
 	}
 	var in struct{ Decision, Note string }
@@ -392,6 +554,9 @@ func (a *API) deviceRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, errBody("not_found", "use POST /v1/devices/{id}/revoke"))
 		return
 	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
 	if err := a.DB.RevokeDevice(r.Context(), id); err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -401,6 +566,9 @@ func (a *API) deviceRevoke(w http.ResponseWriter, r *http.Request) {
 
 // setPlan: POST /v1/billing/plan {plan} — stand-in do Stripe no M3.1.
 func (a *API) setPlan(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "billing") {
+		return
+	}
 	var in struct{ Plan string }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, 400, errBody("bad_request", "json inválido"))
@@ -423,6 +591,9 @@ func (a *API) setPlan(w http.ResponseWriter, r *http.Request) {
 
 // checkout: cria sessão de Checkout no Stripe (ou stub se não configurado).
 func (a *API) checkout(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "billing") {
+		return
+	}
 	var in struct{ Plan string }
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if in.Plan != "pro" && in.Plan != "team" {
@@ -448,6 +619,9 @@ func (a *API) checkout(w http.ResponseWriter, r *http.Request) {
 
 // portal: cria sessão do Customer Portal p/ gerenciar a assinatura.
 func (a *API) portal(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "billing") {
+		return
+	}
 	org := a.orgFrom(r)
 	sub, _ := a.DB.GetSubscription(r.Context(), org)
 	if a.StripeSecretKey == "" || sub == nil {

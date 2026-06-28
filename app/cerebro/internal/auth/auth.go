@@ -11,6 +11,7 @@ import (
 
 type Claims struct {
 	OrgID string `json:"org"`
+	Role  string `json:"role"` // permission_tier: owner|admin|member|billing|viewer
 	jwt.RegisteredClaims
 }
 
@@ -18,9 +19,10 @@ type Auth struct{ secret []byte }
 
 func New(secret string) *Auth { return &Auth{secret: []byte(secret)} }
 
-func (a *Auth) Issue(userID, orgID string, ttl time.Duration) (string, error) {
+func (a *Auth) Issue(userID, orgID, role string, ttl time.Duration) (string, error) {
 	c := Claims{
 		OrgID: orgID,
+		Role:  role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
@@ -28,6 +30,11 @@ func (a *Auth) Issue(userID, orgID string, ttl time.Duration) (string, error) {
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString(a.secret)
+}
+
+func HashPassword(plain string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	return string(b), err
 }
 
 func (a *Auth) Parse(token string) (*Claims, error) {

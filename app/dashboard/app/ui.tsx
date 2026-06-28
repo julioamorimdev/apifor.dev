@@ -70,6 +70,7 @@ const TABS = [
   ["/telemetry", "Telemetria"],
   ["/usage", "Uso"],
   ["/invoices", "Faturas"],
+  ["/org", "Organização"],
 ];
 
 export function Nav() {
@@ -101,19 +102,36 @@ export function Nav() {
   );
 }
 
+// ── auth token (M5.1) ──
+const TOKEN_KEY = "apifor_token";
+export const getToken = () => (typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null);
+export const setToken = (t: string | null) => {
+  if (typeof window === "undefined") return;
+  if (t) localStorage.setItem(TOKEN_KEY, t);
+  else localStorage.removeItem(TOKEN_KEY);
+};
+function authHeaders(): Record<string, string> {
+  const t = getToken();
+  return t ? { Authorization: "Bearer " + t } : {};
+}
+
 // ── data fetching ──
 const API = (p: string) => "/api" + p;
 
 export async function apiGet<T = any>(p: string): Promise<T> {
-  const r = await fetch(API(p));
+  const r = await fetch(API(p), { headers: authHeaders() });
   return r.json();
 }
 export async function apiPost<T = any>(p: string, body: unknown): Promise<T> {
   const r = await fetch(API(p), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
+  return r.json();
+}
+export async function apiDelete<T = any>(p: string): Promise<T> {
+  const r = await fetch(API(p), { method: "DELETE", headers: authHeaders() });
   return r.json();
 }
 

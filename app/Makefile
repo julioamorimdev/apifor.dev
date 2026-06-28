@@ -3,7 +3,8 @@ SHELL := /bin/bash
         secret ipc-status task steps relay-demo git-remote repo prs pr-demo \
         usage plan devices revoke enforce-demo \
         subscription invoices checkout billing-demo \
-        interventions approve reject pipeline-demo ci qa telemetry
+        interventions approve reject pipeline-demo ci qa telemetry \
+        members workspaces rbac-demo
 
 dev: ; docker compose up --build
 
@@ -102,3 +103,8 @@ pipeline-demo: ; @bash scripts/pipeline-demo.sh
 ci: ; @curl -s http://localhost:8088/v1/ci; echo                 # execuções de CI
 qa: ; @curl -s http://localhost:8088/v1/qa; echo                 # relatórios de QA
 telemetry: ; @curl -s http://localhost:8088/v1/telemetry; echo   # agregado da org
+
+# ── M5.1: multi-tenant + RBAC ──
+members: ; @curl -s http://localhost:8088/v1/members; echo       # membros (demo org)
+workspaces: ; @curl -s http://localhost:8088/v1/workspaces; echo # workspaces (demo org)
+rbac-demo: ; @bash scripts/rbac-demo.sh                          # registro, papéis, isolamento por org
