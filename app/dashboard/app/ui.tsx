@@ -26,6 +26,7 @@ const EN_LABEL: Record<string, string> = {
   "/": "Dashboard", "/live": "Live", "/queue": "Queue", "/tasks": "Tasks", "/prs": "Pull Requests", "/interventions": "Intervention",
   "/ci": "CI", "/qa": "QA", "/routines": "Routines", "/telemetry": "Telemetry", "/knowledge": "Knowledge",
   "/logs": "Logs", "/config": "Settings", "/audit": "Audit", "/org": "Organization", "/usage": "Usage", "/invoices": "Invoices", "/pricing": "Plans",
+  "/web": "Web", "/cloud": "Cloud", "/conta": "Account", "/ajuda": "Help",
 };
 export function useLang(): [string, (l: string) => void] {
   const [lang, set] = useState("pt");
@@ -167,8 +168,8 @@ export function MeterCard({ label, value, limit, pct, tone = "accent", sub }: { 
 type Item = [string, string, string?]; // [href, label_pt, countKey?]
 const NAV: { key: string; items: Item[] }[] = [
   { key: "op", items: [["/", "Dashboard"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"], ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"], ["/live", "Live", "workers"], ["/ci", "CI"], ["/qa", "QA"], ["/routines", "Rotinas"], ["/telemetry", "Telemetria"], ["/logs", "Logs"]] },
-  { key: "sys", items: [["/knowledge", "Conhecimento"], ["/config", "Configuração"], ["/audit", "Auditoria"]] },
-  { key: "acct", items: [["/org", "Organização"], ["/usage", "Uso"], ["/invoices", "Faturas"], ["/pricing", "Planos"]] },
+  { key: "sys", items: [["/knowledge", "Conhecimento"], ["/config", "Configuração"], ["/web", "Web"], ["/cloud", "Cloud"], ["/audit", "Auditoria"]] },
+  { key: "acct", items: [["/org", "Organização"], ["/usage", "Uso"], ["/invoices", "Faturas"], ["/pricing", "Planos"], ["/conta", "Conta"], ["/ajuda", "Ajuda"]] },
 ];
 
 function useCounts() {
@@ -219,6 +220,10 @@ const ICONS: Record<string, string[]> = {
   "/routines": ["M17 1l4 4-4 4", "M3 11V9a4 4 0 0 1 4-4h14", "M7 23l-4-4 4-4", "M21 13v2a4 4 0 0 1-4 4H3"],
   "/telemetry": ["M3 3v18h18", "M18 17V9", "M13 17V5", "M8 17v-3"],
   "/logs": ["M4 17l6-6-6-6", "M12 19h8"],
+  "/web": ["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z", "M2 12h20", "M12 2c3 3 4.5 6.5 4.5 10S15 19 12 22 7.5 15.5 7.5 12 9 5 12 2z"],
+  "/cloud": ["M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"],
+  "/conta": ["M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2", "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
+  "/ajuda": ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z", "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3", "M12 17h.01"],
   "/knowledge": ["M4 19.5A2.5 2.5 0 0 1 6.5 17H20", "M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"],
   "/config": ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"],
   "/audit": ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
@@ -427,17 +432,19 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const API = (p: string) => API_BASE + p;
 export const sseURL = (p: string) => API_BASE + p;
 
+// parse tolerante: nunca quebra com corpo vazio/não-JSON (ex.: 429/204)
+async function safeJson<T>(r: Response): Promise<T> {
+  const t = await r.text();
+  try { return (t ? JSON.parse(t) : {}) as T; } catch { return {} as T; }
+}
 export async function apiGet<T = any>(p: string): Promise<T> {
-  const r = await fetch(API(p), { headers: authHeaders() });
-  return r.json();
+  return safeJson<T>(await fetch(API(p), { headers: authHeaders() }));
 }
 export async function apiPost<T = any>(p: string, body: unknown): Promise<T> {
-  const r = await fetch(API(p), { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify(body) });
-  return r.json();
+  return safeJson<T>(await fetch(API(p), { method: "POST", headers: { "content-type": "application/json", ...authHeaders() }, body: JSON.stringify(body) }));
 }
 export async function apiDelete<T = any>(p: string): Promise<T> {
-  const r = await fetch(API(p), { method: "DELETE", headers: authHeaders() });
-  return r.json();
+  return safeJson<T>(await fetch(API(p), { method: "DELETE", headers: authHeaders() }));
 }
 
 /** Faz GET em `path` e repete a cada `ms`. Retorna { data, reload }. */
