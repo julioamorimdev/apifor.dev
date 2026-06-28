@@ -4,8 +4,11 @@ import { card, input, Page, PageHead, Pills, short, usePoll, useT } from "../ui"
 
 type Log = { when: string; task_id: string; type: string; status: string; log: string };
 
-const FILTERS: [string, string][] = [["all", "Todos"], ["done", "OK"], ["failed", "Falhas"]];
-const dot = (s: string) => (s === "done" || s === "passed" || s === "approved" || s === "merged" ? "var(--green)" : s === "failed" || s === "changes" ? "var(--red)" : s === "running" ? "var(--blue)" : "var(--mute)");
+const FILTERS: [string, string][] = [["all", "Todos"], ["done", "OK"], ["failed", "Erro"]];
+const lvl = (s: string): [string, string] =>
+  s === "failed" || s === "changes" ? ["ERRO", "var(--red)"]
+    : s === "done" || s === "passed" || s === "approved" || s === "merged" ? ["OK", "var(--green)"]
+      : s === "running" ? ["INFO", "var(--blue)"] : ["INFO", "var(--orange)"];
 
 export default function Logs() {
   const t = useT();
@@ -25,20 +28,22 @@ export default function Logs() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar log…")} style={{ ...input, flex: 1, minWidth: 160 }} />
           <Pills options={FILTERS} value={f} onChange={setF} />
         </div>
-        <div style={{ fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.7, padding: "10px 4px", maxHeight: "68vh", overflowY: "auto" }}>
-          {rows.map((l, i) => (
-            <div key={i} style={{ display: "flex", gap: 10, padding: "4px 14px", alignItems: "baseline" }}>
-              <span style={{ color: "var(--mute)", flexShrink: 0 }}>{l.when}</span>
-              <span style={{ width: 7, height: 7, borderRadius: 7, background: dot(l.status), flexShrink: 0, alignSelf: "center" }} />
-              <span style={{ color: "var(--accent)", flexShrink: 0 }}>#{short(l.task_id.replace(/^tsk_/, ""), 6)}</span>
-              <span style={{ color: "var(--blue)", flexShrink: 0, width: 56 }}>{l.type}</span>
-              <span style={{ color: "var(--dim)", flexShrink: 0, width: 64 }}>{l.status}</span>
-              <span style={{ color: "var(--ink)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{l.log || "—"}</span>
-            </div>
-          ))}
-          {!rows.length && <div style={{ color: "var(--mute)", padding: "14px" }}>nenhum log ainda — crie uma tarefa com repositório pra ver o pipeline.</div>}
+        <div style={{ fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.75, padding: "12px 6px", maxHeight: "68vh", overflowY: "auto", background: "var(--bg)" }}>
+          {rows.map((l, i) => {
+            const [lv, lc] = lvl(l.status);
+            return (
+              <div key={i} style={{ display: "flex", gap: 12, padding: "2px 14px", alignItems: "baseline" }}>
+                <span style={{ color: "var(--mute)", flexShrink: 0 }}>{(l.when || "").slice(11) || l.when}</span>
+                <span style={{ color: lc, flexShrink: 0, width: 40, fontWeight: 600 }}>{lv}</span>
+                <span style={{ color: "var(--dim)", flexShrink: 0, width: 64 }}>{l.type}#{short(l.task_id.replace(/^tsk_/, ""), 4)}</span>
+                <span style={{ color: "var(--ink)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{l.log || l.status}</span>
+              </div>
+            );
+          })}
+          {!rows.length && <div style={{ color: "var(--mute)", padding: "4px 14px" }}>{t("nenhum log ainda", "no logs yet")} — {t("crie uma tarefa com repositório pra ver o pipeline.", "create a task with a repo to see the pipeline.")}</div>}
+          <div style={{ padding: "6px 14px", color: "var(--green)" }}>apifor@pool ~$ <span className="apf-cursor" style={{ background: "var(--green)", color: "var(--green)" }}>█</span></div>
         </div>
-        <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} linha(s)</div>
+        <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} {t("linha(s)", "line(s)")}</div>
       </div>
     </Page>
   );
