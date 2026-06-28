@@ -1,0 +1,28 @@
+[Unit]
+Description=apifor.dev executor (data plane — workers de IA locais)
+Documentation=https://github.com/julioamorimdev/apifor.dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# diretório local (vault cifrado, identidade mTLS, workdirs, KB) — fora do alcance da rede
+Environment=APIFOR_HOME=/var/lib/apifor
+Environment=APIFOR_WORKDIR=/var/lib/apifor/work
+# endereços do cérebro (control plane) — ajuste p/ o seu deploy
+Environment=CEREBRO_HTTP=https://api.apifor.dev
+Environment=CEREBRO_GRPC=https://api.apifor.dev:9090
+ExecStart=/usr/local/bin/apifor-executor
+Restart=on-failure
+RestartSec=5
+# hardening do serviço
+DynamicUser=yes
+StateDirectory=apifor
+RuntimeDirectory=apifor
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

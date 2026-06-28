@@ -253,8 +253,25 @@ REST: `GET /v1/ci`, `GET /v1/qa`, `GET /v1/telemetry`. Telas **CI**, **QA** e
   cross-tenant**. Provado: contexto=A, `INSERT org_id=B` → *RLS policy violation*; creates
   normais funcionam. Updates/deletes + workers seguem no superuser (documentado).
 
-**M3, M4 e M5 completos; M6 quase completo (RLS reads+creates).** Próximo: cloud workers
-gerenciados / SSO-SAML (infra externa) ou **M7** (empacotamento/launch).
+- **M7** — **empacotamento & launch** (parcial): **serviço de fundo** do executor
+  ([`deploy/`](deploy): `sudo deploy/install.sh` — systemd no Linux, launchd no macOS),
+  scaffold do **app desktop Tauri** ([`desktop/`](desktop), precisa do toolchain p/ buildar),
+  e telas **Início** (onboarding) + **Planos** (pricing) na GUI. Validado: telas compilam,
+  artefatos de serviço bem-formados.
+
+**M3, M4 e M5 completos; M6 (RLS reads+creates) e M7 (serviço/onboarding/preços) parciais.**
+Falta: installer Tauri buildado + auto-update, cloud workers / SSO-SAML (infra externa).
+
+## Empacotamento (M7)
+
+```bash
+sudo app/deploy/install.sh            # build do executor + registra serviço de fundo
+sudo app/deploy/install.sh uninstall  # remove
+```
+
+Serviço de fundo p/ "deixar rodando na VM" (systemd/launchd). App desktop (Tauri) em
+[`desktop/`](desktop) — scaffold; build precisa do toolchain Tauri. Onboarding em
+`/onboarding`, preços em `/pricing`.
 
 ## Hardening (M6.1)
 
