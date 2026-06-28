@@ -45,8 +45,9 @@ export default function Dashboard() {
             <span style={{ color: "var(--mute)", fontSize: 12 }}>tempo real</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <span style={{ width: 56, height: 56, borderRadius: 56, background: running ? "var(--green-tint)" : "var(--border)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ width: 16, height: 16, borderRadius: 16, background: running ? "var(--green)" : "var(--mute)" }} />
+            <span style={{ position: "relative", width: 56, height: 56, borderRadius: 56, background: running ? "var(--green-tint)" : "var(--border)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+              {running && <span style={{ position: "absolute", inset: 8, borderRadius: 56, border: "2px solid var(--green)", animation: "pulsering 2.6s ease-out infinite" }} />}
+              <span className={running ? "apf-live" : ""} style={{ width: 16, height: 16, borderRadius: 16, background: running ? "var(--green)" : "var(--mute)" }} />
             </span>
             <div>
               <div style={{ fontFamily: "var(--head)", fontWeight: 900, fontSize: 26, color: running ? "var(--green)" : "var(--mute)" }}>{running ? "RODANDO" : "PARADO"}</div>

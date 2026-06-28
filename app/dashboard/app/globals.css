@@ -22,6 +22,8 @@
   --sans: 'Geist', -apple-system, 'Segoe UI', system-ui, sans-serif;
   --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --head: 'Montserrat', var(--sans);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 10px 30px rgba(0, 0, 0, .30);
+  --shadow-pop: 0 8px 28px rgba(0, 0, 0, .55);
 }
 
 :root[data-theme="light"] {
@@ -44,6 +46,8 @@
   --green-tint: rgba(26, 127, 55, .12);
   --orange-tint: rgba(188, 76, 0, .10);
   --red-tint: rgba(207, 34, 46, .10);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 8px 24px rgba(0, 0, 0, .07);
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, .16);
 }
 
 * { box-sizing: border-box; }
@@ -64,6 +68,27 @@ input, select, button, textarea { font-family: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* transições / micro-interações */
 .apf-link { transition: background .12s, color .12s; }
 .apf-link:hover { background: var(--elev); color: var(--ink); }
+.apf-iconbtn { transition: background .12s, color .12s, transform .12s; }
 .apf-iconbtn:hover { background: var(--elev); color: var(--ink); }
+button { transition: transform .12s ease, filter .12s ease, background .12s, color .12s, opacity .12s; }
+button:not(:disabled):active { transform: translateY(1px); }
+button:not(:disabled):hover { filter: brightness(1.06); }
+input, select, textarea { transition: border-color .15s, background .15s; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+tbody tr { transition: background .1s; }
+tbody tr:hover { background: color-mix(in srgb, var(--elev) 55%, transparent); }
+
+/* animações (dos mockups) */
+@keyframes fadein { from { opacity: 0 } to { opacity: 1 } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.985) } to { opacity: 1; transform: translateY(0) scale(1) } }
+@keyframes livedot { 0%, 100% { opacity: .35 } 50% { opacity: 1 } }
+@keyframes pulsering { 0% { transform: scale(.55); opacity: .6 } 80% { opacity: 0 } 100% { transform: scale(1.9); opacity: 0 } }
+@keyframes draw { from { stroke-dashoffset: 140 } to { stroke-dashoffset: 0 } }
+.apf-rise { animation: rise .24s cubic-bezier(.2, .7, .3, 1) both; }
+.apf-fadein { animation: fadein .15s ease-out both; }
+.apf-live { animation: livedot 1.6s ease-in-out infinite; }
+.apf-spark { stroke-dasharray: 140; animation: draw 1s ease-out both; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important } }
