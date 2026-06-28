@@ -148,7 +148,7 @@ export const badge = (s: string) => {
 export const cell = { padding: "9px 14px", borderBottom: "1px solid var(--border)", textAlign: "left" as const, fontSize: 13.5 };
 export const thCell = { ...cell, color: "var(--mute)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: ".06em", fontWeight: 600 };
 export const tableStyle = { width: "100%", borderCollapse: "collapse" as const };
-export const card = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", marginBottom: 18 };
+export const card = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", marginBottom: 18, boxShadow: "var(--shadow)" };
 export const input = { background: "var(--bg)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 11px", fontSize: 14, outline: "none" };
 export const btn = { background: "var(--accent)", color: "var(--accent-ink)", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: "pointer", fontSize: 14 };
 export function short(id: string, n = 16) { return id.length > n ? id.slice(0, n) + "…" : id; }
@@ -227,7 +227,7 @@ export function Sparkline({ data, color = "--accent", w = 116, h = 32 }: { data:
   const pts = d.map((v, i) => `${(i / (d.length - 1)) * w},${(h - 3) - ((v - min) / span) * (h - 6) + 1}`).join(" ");
   return (
     <svg width={w} height={h} style={{ display: "block", flexShrink: 0 }}>
-      <polyline points={pts} fill="none" stroke={`var(${color})`} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline className="apf-spark" points={pts} fill="none" stroke={`var(${color})`} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -370,8 +370,8 @@ function CommandPalette() {
   const matches = ALL_ITEMS.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
   const go = (href: string) => { setOpen(false); window.location.href = href; };
   return (
-    <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 100, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 560, maxWidth: "92vw", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,.5)", overflow: "hidden" }}>
+    <div className="apf-fadein" onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 100, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh" }}>
+      <div className="apf-rise" onClick={(e) => e.stopPropagation()} style={{ width: 560, maxWidth: "92vw", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "var(--shadow-pop)", overflow: "hidden" }}>
         <input ref={ref} value={q} placeholder="Ir para…"
           onChange={(e) => { setQ(e.target.value); setSel(0); }}
           onKeyDown={(e) => {
@@ -419,7 +419,7 @@ function WorkspaceMenu({ lang }: { lang: string }) {
         <span style={{ marginLeft: "auto", color: "var(--mute)" }}>▾</span>
       </button>
       {open && (
-        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, zIndex: 20, boxShadow: "0 10px 30px rgba(0,0,0,.4)" }}>
+        <div className="apf-fadein" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, zIndex: 20, boxShadow: "var(--shadow-pop)" }}>
           {wsps.map((w) => (
             <a key={w.id} className="apf-link" href="/" onClick={() => { try { localStorage.setItem("apifor_wsp", w.id); } catch {} }}
               style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, fontSize: 13 }}>
@@ -479,7 +479,7 @@ function LangMenu({ lang, setLang }: { lang: string; setLang: (l: string) => voi
     <div style={{ position: "relative" }}>
       <button className="apf-iconbtn" style={ic} onClick={() => setOpen((o) => !o)} title="Idioma">{lang.toUpperCase()}</button>
       {open && (
-        <div style={{ position: "absolute", top: "110%", right: 0, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 5, zIndex: 20, boxShadow: "0 10px 30px rgba(0,0,0,.4)" }}>
+        <div className="apf-fadein" style={{ position: "absolute", top: "110%", right: 0, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 5, zIndex: 20, boxShadow: "var(--shadow-pop)" }}>
           {[["pt", "Português"], ["en", "English"]].map(([code, name]) => (
             <div key={code} className="apf-link" onClick={() => { setLang(code); setOpen(false); }}
               style={{ padding: "7px 12px", borderRadius: 7, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap", color: lang === code ? "var(--accent)" : "var(--ink)" }}>{name}</div>
@@ -506,7 +506,7 @@ function Topbar() {
       </button>
       <span style={{ flex: 1 }} />
       <span style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 11px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: running ? "var(--green-tint)" : "var(--border)", color: running ? "var(--green)" : "var(--mute)" }}>
-        <span style={{ width: 7, height: 7, borderRadius: 7, background: "currentColor" }} />{running ? (lang === "en" ? "RUNNING" : "RODANDO") : (lang === "en" ? "STOPPED" : "PARADO")}
+        <span className={running ? "apf-live" : ""} style={{ width: 7, height: 7, borderRadius: 7, background: "currentColor" }} />{running ? (lang === "en" ? "RUNNING" : "RODANDO") : (lang === "en" ? "STOPPED" : "PARADO")}
       </span>
       <LangMenu lang={lang} setLang={setLang} />
       <button className="apf-iconbtn" style={ic} onClick={toggle} title="Alternar tema">{theme === "dark" ? "☀️" : "🌙"}</button>
@@ -568,7 +568,7 @@ export function Page({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <Topbar />
-        <main style={{ padding: "26px 32px", maxWidth: 1180, width: "100%" }}>{children}</main>
+        <main className="apf-rise" style={{ padding: "26px 32px", maxWidth: 1180, width: "100%" }}>{children}</main>
       </div>
       <CommandPalette />
     </div>
