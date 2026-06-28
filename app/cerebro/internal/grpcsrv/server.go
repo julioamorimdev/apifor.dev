@@ -23,6 +23,7 @@ type Server struct {
 	DB   *db.DB
 	Auth *auth.Auth
 	Hub  *Hub
+	Cfg  EnforceConfig
 }
 
 // Enroll: troca o enrollment token (JWT de login) por um device token (M1; mTLS depois).
@@ -81,20 +82,19 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 			s.DB.TouchDevice(ctx, dev.ID)
 
 		case apiforv1.MsgType_LEASE_REQUEST:
-			workerID, err := s.DB.CreateWorkerInstance(ctx, dev.OrgID, db.DemoWspID)
-			if err != nil {
-				log.Printf("worker_instance err: %v", err)
+			// M3.1: trava server-side (max_workers, worker-hours 36h/sem, TTL por plano).
+			granted, reason := s.tryGrant(ctx, dev.OrgID, db.DemoWspID)
+			if granted == nil {
+				log.Printf("lease NEGADO: org=%s motivo=%s", dev.OrgID, reason)
+				out <- &apiforv1.Envelope{
+					Type:    apiforv1.MsgType_LEASE_DENIED,
+					Payload: &apiforv1.Envelope_LeaseDenied{LeaseDenied: &apiforv1.LeaseDenied{Reason: reason}},
+				}
 				continue
 			}
-			leaseID, err := s.DB.CreateLease(ctx, dev.OrgID, workerID, 4*time.Hour, false)
-			if err != nil {
-				log.Printf("lease err: %v", err)
-				continue
-			}
-			log.Printf("lease concedido: worker=%s lease=%s", workerID, leaseID)
 			out <- &apiforv1.Envelope{
 				Type:    apiforv1.MsgType_LEASE_GRANTED,
-				Payload: &apiforv1.Envelope_LeaseGranted{LeaseGranted: &apiforv1.LeaseGranted{LeaseId: leaseID, WorkerId: workerID, AutoRenew: false}},
+				Payload: &apiforv1.Envelope_LeaseGranted{LeaseGranted: granted},
 			}
 
 		case apiforv1.MsgType_STEP_COMPLETED:

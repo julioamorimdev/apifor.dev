@@ -43,6 +43,11 @@ services:
       CEREBRO_GRPC: ":9090"
       DATABASE_URL: "postgres://postgres:pg@postgres/apifor?sslmode=disable"
       JWT_SECRET: "dev-secret"
+      # M3.1 enforcement — knobs de teste (encolhem 4h/36h p/ segundos). 0/ausente = produção.
+      LEASE_TTL_SEC: "${LEASE_TTL_SEC:-}"
+      WORKER_HOURS_CAP_SEC: "${WORKER_HOURS_CAP_SEC:-}"
+      REAPER_TICK_SEC: "${REAPER_TICK_SEC:-}"
+      GRACE_SEC: "${GRACE_SEC:-}"
     depends_on:
       migrate: { condition: service_completed_successfully }
     ports: ["8088:8080", "9090:9090"]
@@ -54,6 +59,8 @@ services:
       CEREBRO_GRPC: "http://cerebro:9090"
       APIFOR_HOME: "/var/lib/apifor"
       APIFOR_WORKDIR: "/workspace"
+      # M3.1: pede N leases extras no boot p/ demonstrar a trava max_workers (0 = nenhum)
+      APIFOR_EXTRA_LEASES: "${APIFOR_EXTRA_LEASES:-0}"
       # chave Anthropic opcional: se ausente, o relay usa o stub determinístico.
       # injete a real via IPC (make secret KEY=sk-...), nunca via env do cérebro.
     volumes:

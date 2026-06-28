@@ -263,6 +263,182 @@ func jsonStr(s string) string {
 	return string(b)
 }
 
+// ── M3.1: enforcement de plano (lease, worker-hours, kill-switch) — server-side ──
+
+type PlanLimits struct {
+	Plan        string
+	MaxWorkers  *int // nil = ilimitado
+	LeaseTTLMin *int // nil = sem expiração
+	WeeklyHours *int // nil = ilimitado
+}
+
+func (d *DB) GetPlanLimits(ctx context.Context, orgID string) (*PlanLimits, error) {
+	var pl PlanLimits
+	err := d.Pool.QueryRow(ctx, `SELECT p.id,p.max_workers,p.lease_ttl_min,p.weekly_worker_hours
+		FROM org o JOIN plan_catalog p ON p.id=o.plan WHERE o.id=$1`, orgID).
+		Scan(&pl.Plan, &pl.MaxWorkers, &pl.LeaseTTLMin, &pl.WeeklyHours)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &pl, err
+}
+
+func (d *DB) ActiveLeaseCount(ctx context.Context, orgID string) (int, error) {
+	var n int
+	err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM lease WHERE org_id=$1 AND ended_at IS NULL`, orgID).Scan(&n)
+	return n, err
+}
+
+func (d *DB) WeekSecondsUsed(ctx context.Context, orgID string) (int64, error) {
+	var s int64
+	err := d.Pool.QueryRow(ctx, `SELECT COALESCE(seconds_used,0) FROM worker_hours_counter
+		WHERE org_id=$1 AND week_start=date_trunc('week',now())::date`, orgID).Scan(&s)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return s, err
+}
+
+func (d *DB) AddWorkerSeconds(ctx context.Context, orgID string, sec int64) error {
+	_, err := d.Pool.Exec(ctx, `INSERT INTO worker_hours_counter(org_id,week_start,seconds_used)
+		VALUES($1, date_trunc('week',now())::date, $2)
+		ON CONFLICT (org_id,week_start) DO UPDATE SET seconds_used=worker_hours_counter.seconds_used+EXCLUDED.seconds_used`,
+		orgID, sec)
+	return err
+}
+
+func (d *DB) RecordUsage(ctx context.Context, orgID, workerID, leaseID, eventType string) error {
+	var wid, lid *string
+	if workerID != "" {
+		wid = &workerID
+	}
+	if leaseID != "" {
+		lid = &leaseID
+	}
+	_, err := d.Pool.Exec(ctx, `INSERT INTO usage_event(id,org_id,worker_instance_id,lease_id,type)
+		VALUES($1,$2,$3,$4,$5)`, NewID("use"), orgID, wid, lid, eventType)
+	return err
+}
+
+// GrantLease cria worker + lease com TTL (ttlSec>0 = expira) e auto_renew.
+func (d *DB) GrantLease(ctx context.Context, orgID, wspID string, ttlSec int, autoRenew bool) (workerID, leaseID string, expMs int64, err error) {
+	workerID = NewID("wki")
+	if _, err = d.Pool.Exec(ctx, `INSERT INTO worker_instance(id,org_id,workspace_id,source,host,status,last_heartbeat_at)
+		VALUES($1,$2,$3,'pool','local','running',now())`, workerID, orgID, wspID); err != nil {
+		return
+	}
+	leaseID = NewID("lse")
+	var exp *time.Time
+	if ttlSec > 0 {
+		t := time.Now().Add(time.Duration(ttlSec) * time.Second)
+		exp = &t
+		expMs = t.UnixMilli()
+	}
+	if _, err = d.Pool.Exec(ctx, `INSERT INTO lease(id,org_id,worker_instance_id,expires_at,auto_renew)
+		VALUES($1,$2,$3,$4,$5)`, leaseID, orgID, workerID, exp, autoRenew); err != nil {
+		return
+	}
+	_, err = d.Pool.Exec(ctx, `UPDATE worker_instance SET lease_id=$1 WHERE id=$2`, leaseID, workerID)
+	return
+}
+
+// ActiveLease é uma linha viva p/ o reaper avaliar.
+type ActiveLease struct {
+	LeaseID   string
+	WorkerID  string
+	OrgID     string
+	ExpiresAt *time.Time
+	AutoRenew bool
+}
+
+func (d *DB) ActiveLeases(ctx context.Context) ([]ActiveLease, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,worker_instance_id,org_id,expires_at,auto_renew
+		FROM lease WHERE ended_at IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveLease
+	for rows.Next() {
+		var a ActiveLease
+		if err := rows.Scan(&a.LeaseID, &a.WorkerID, &a.OrgID, &a.ExpiresAt, &a.AutoRenew); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) EndLease(ctx context.Context, leaseID, reason string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE lease SET ended_at=now(),end_reason=$2 WHERE id=$1 AND ended_at IS NULL`,
+		leaseID, reason)
+	return err
+}
+
+func (d *DB) RenewLease(ctx context.Context, leaseID string, ttlSec int) error {
+	t := time.Now().Add(time.Duration(ttlSec) * time.Second)
+	_, err := d.Pool.Exec(ctx, `UPDATE lease SET expires_at=$2 WHERE id=$1`, leaseID, t)
+	return err
+}
+
+func (d *DB) PauseWorker(ctx context.Context, workerID string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE worker_instance SET status='paused' WHERE id=$1 AND status<>'stopped'`, workerID)
+	return err
+}
+
+func (d *DB) StopWorker(ctx context.Context, workerID string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE worker_instance SET status='stopped',current_task_id=NULL,current_step=NULL,lease_id=NULL WHERE id=$1`, workerID)
+	return err
+}
+
+func (d *DB) OrgHasRevokedDevice(ctx context.Context, orgID string) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM device WHERE org_id=$1 AND revoked_at IS NOT NULL)`, orgID).Scan(&ok)
+	return ok, err
+}
+
+func (d *DB) RevokeDevice(ctx context.Context, deviceID string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE device SET revoked_at=now() WHERE id=$1`, deviceID)
+	return err
+}
+
+func (d *DB) ListDevices(ctx context.Context, orgID string) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(label,''),
+		COALESCE(to_char(last_seen_at,'YYYY-MM-DD HH24:MI:SS'),''),
+		CASE WHEN revoked_at IS NULL THEN 'active' ELSE 'revoked' END
+		FROM device WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var id, label, seen, st string
+		if err := rows.Scan(&id, &label, &seen, &st); err != nil {
+			return nil, err
+		}
+		out = append(out, Row{"id": id, "label": label, "last_seen": seen, "status": st})
+	}
+	return out, rows.Err()
+}
+
+// SetPlan troca o plano da org e registra a assinatura (stand-in de Stripe no M3.1).
+func (d *DB) SetPlan(ctx context.Context, orgID, plan string) error {
+	if _, err := d.Pool.Exec(ctx, `UPDATE org SET plan=$2,updated_at=now() WHERE id=$1`, orgID, plan); err != nil {
+		return err
+	}
+	// upsert manual (subscription não tem UNIQUE(org_id))
+	tag, err := d.Pool.Exec(ctx, `UPDATE subscription SET plan=$2,status='active',updated_at=now() WHERE org_id=$1`, orgID, plan)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		_, err = d.Pool.Exec(ctx, `INSERT INTO subscription(id,org_id,plan,status,seats) VALUES($1,$2,$3,'active',1)`,
+			NewID("sub"), orgID, plan)
+	}
+	return err
+}
+
 func (d *DB) SetTaskStatus(ctx context.Context, taskID, status string) error {
 	_, err := d.Pool.Exec(ctx, `UPDATE task SET status=$2,updated_at=now() WHERE id=$1`, status, taskID)
 	return err

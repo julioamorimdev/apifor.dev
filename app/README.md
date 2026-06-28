@@ -65,6 +65,28 @@ registro local. REST: `GET|POST /v1/repos`, `GET /v1/prs`; `POST /v1/tasks` acei
 > Isolamento: M2.2 usa **workdir isolado por tarefa**. Sandbox de container OS-level
 > (DinD/runc) fica como hardening do M6.
 
+## Enforcement de plano (M3.1)
+
+Todas as travas vivem no **cérebro** (server-side; o cliente não burla). Um **reaper**
+em background acumula worker-hours, expira lease, renova Pro+ e aplica o kill-switch.
+
+```bash
+make usage                 # uso vs limites do plano (max_workers, worker-hours, lease TTL)
+make plan PLAN=pro         # troca de plano (stand-in do Stripe no M3.1) — libera 4 workers
+make devices               # lista devices
+make revoke DEV=dev_...    # kill-switch: revoga o device -> reaper corta os leases
+make enforce-demo          # demo: max_workers + lease TTL Free + kill-switch (knobs de teste)
+```
+
+Travas: **max_workers** (Free 1, Pro 4, Team 20), **lease TTL** (Free 4h não-renovável;
+Pro+ sem expiração), **worker-hours 36h/sem** no Free, **kill-switch** (device revogado →
+`LEASE_REVOKED`+`STOP_WORKER`). Knobs de teste encolhem 4h/36h p/ segundos:
+`LEASE_TTL_SEC`, `WORKER_HOURS_CAP_SEC`, `REAPER_TICK_SEC`, `GRACE_SEC`. REST:
+`GET /v1/usage`, `GET /v1/devices`, `POST /v1/devices/{id}/revoke`, `POST /v1/billing/plan`.
+
+> Falta do M3: **Stripe** (Checkout/Portal/webhooks + dunning) e **mTLS real** (PKI) —
+> M3.2, dependem de credenciais externas. Graça de 5min é parcial.
+
 ## Estado
 - **M0** — fundação: serviços compilam e sobem, banco migrado.
 - **M1** — espinha e2e: login JWT → Enroll → stream gRPC → lease → dispatch → task `merged`.
@@ -78,6 +100,11 @@ registro local. REST: `GET|POST /v1/repos`, `GET /v1/prs`; `POST /v1/tasks` acei
   tarefa → plano/exec, vê o plano), **Configuração** (repos + segredos só-metadado),
   **PRs**. `make dashboard` em http://localhost:3000 (proxy `/api` → cérebro :8088).
   Build limpo; rotas e fluxo completo validados pela API proxy.
+- **M3.1** — enforcement de plano (server-side): reaper que aplica **max_workers**,
+  **lease TTL** (Free 4h não-renovável; Pro+ ∞), **worker-hours 36h/sem** (ledger
+  `usage_event` + `worker_hours_counter`) e **kill-switch** (revoga device →
+  `LEASE_REVOKED`+`STOP_WORKER`). REST `/v1/usage` `/v1/devices` `/v1/billing/plan` +
+  tela **Uso**. 4 cenários validados e2e (knobs encolhem 4h/36h p/ segundos).
 
-Próximo: **M3** (enforcement de plano + billing) ou **M4** (gates do pipeline:
+Próximo: **M3.2** (Stripe + mTLS real) ou **M4** (gates do pipeline:
 plan/exec/test/review/merge, agent_profile, merge rules, intervenção).

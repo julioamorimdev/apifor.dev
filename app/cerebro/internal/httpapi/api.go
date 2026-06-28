@@ -23,6 +23,9 @@ type API struct {
 	DB   *db.DB
 	Auth *auth.Auth
 	Hub  Pusher
+	// overrides de enforcement (espelham o reaper) p/ exibir cap/TTL efetivos em /v1/usage
+	HoursCapOverrideSec int
+	LeaseTTLOverrideSec int
 }
 
 func (a *API) Routes() http.Handler {
@@ -35,6 +38,10 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/secrets", a.secrets)       // GET lista, POST registra metadado
 	mux.HandleFunc("/v1/repos", a.repos)           // GET lista, POST registra repositório
 	mux.HandleFunc("/v1/prs", a.prs)               // GET lista pull requests
+	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
+	mux.HandleFunc("/v1/devices", a.devices)       // GET lista devices
+	mux.HandleFunc("/v1/devices/", a.deviceRevoke) // POST /v1/devices/{id}/revoke (kill-switch)
+	mux.HandleFunc("/v1/billing/plan", a.setPlan)  // POST troca de plano (stand-in Stripe)
 	mux.HandleFunc("/v1/workers/stream", a.stream) // SSE
 	return cors(mux)
 }
@@ -209,6 +216,92 @@ func (a *API) prs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// usage: uso atual vs limites do plano (server-side; o cliente não pode burlar).
+func (a *API) usage(w http.ResponseWriter, r *http.Request) {
+	org := a.orgFrom(r)
+	pl, err := a.DB.GetPlanLimits(r.Context(), org)
+	if err != nil || pl == nil {
+		writeJSON(w, 500, errBody("internal", "sem plano"))
+		return
+	}
+	active, _ := a.DB.ActiveLeaseCount(r.Context(), org)
+	used, _ := a.DB.WeekSecondsUsed(r.Context(), org)
+
+	capSec := 0
+	if pl.WeeklyHours != nil {
+		if a.HoursCapOverrideSec > 0 {
+			capSec = a.HoursCapOverrideSec
+		} else {
+			capSec = *pl.WeeklyHours * 3600
+		}
+	}
+	ttlSec := 0
+	if pl.LeaseTTLMin != nil {
+		if a.LeaseTTLOverrideSec > 0 {
+			ttlSec = a.LeaseTTLOverrideSec
+		} else {
+			ttlSec = *pl.LeaseTTLMin * 60
+		}
+	}
+	out := map[string]any{
+		"plan":              pl.Plan,
+		"active_workers":    active,
+		"week_seconds_used": used,
+		"week_cap_seconds":  capSec, // 0 = ilimitado
+		"lease_ttl_seconds": ttlSec, // 0 = sem expiração
+	}
+	if pl.MaxWorkers != nil {
+		out["max_workers"] = *pl.MaxWorkers
+	} else {
+		out["max_workers"] = nil
+	}
+	writeJSON(w, 200, out)
+}
+
+func (a *API) devices(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListDevices(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// deviceRevoke: POST /v1/devices/{id}/revoke — kill-switch (revoga o device).
+func (a *API) deviceRevoke(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/devices/")
+	id := strings.TrimSuffix(path, "/revoke")
+	if r.Method != http.MethodPost || id == "" || id == path {
+		writeJSON(w, 404, errBody("not_found", "use POST /v1/devices/{id}/revoke"))
+		return
+	}
+	if err := a.DB.RevokeDevice(r.Context(), id); err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "revoked": true})
+}
+
+// setPlan: POST /v1/billing/plan {plan} — stand-in do Stripe no M3.1.
+func (a *API) setPlan(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Plan string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, 400, errBody("bad_request", "json inválido"))
+		return
+	}
+	switch in.Plan {
+	case "free", "pro", "team", "enterprise":
+	default:
+		writeJSON(w, 400, errBody("bad_request", "plano inválido"))
+		return
+	}
+	if err := a.DB.SetPlan(r.Context(), a.orgFrom(r), in.Plan); err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"plan": in.Plan})
 }
 
 // SSE: empurra workers+tasks a cada 1s.

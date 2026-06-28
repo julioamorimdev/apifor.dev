@@ -64,6 +64,7 @@ const TABS = [
   ["/tasks", "Tarefas"],
   ["/config", "Configuração"],
   ["/prs", "PRs"],
+  ["/usage", "Uso"],
 ];
 
 export function Nav() {

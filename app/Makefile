@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 .PHONY: dev up down db migrate cerebro executor dashboard logs ps clean smoke \
-        secret ipc-status task steps relay-demo git-remote repo prs pr-demo
+        secret ipc-status task steps relay-demo git-remote repo prs pr-demo \
+        usage plan devices revoke enforce-demo
 
 dev: ; docker compose up --build
 
@@ -66,3 +67,13 @@ prs: ; @curl -s http://localhost:8088/v1/prs; echo
 
 # demo ponta-a-ponta do M2.2: clone -> coda -> commit -> push -> PR
 pr-demo: ; @bash scripts/pr-demo.sh
+
+# ── M3.1: enforcement de plano (server-side) ──
+
+usage: ; @curl -s http://localhost:8088/v1/usage; echo                       # uso vs limites
+plan: ; @curl -s -XPOST http://localhost:8088/v1/billing/plan -H 'content-type: application/json' -d '{"plan":"$(or $(PLAN),pro)"}'; echo  # troca de plano
+devices: ; @curl -s http://localhost:8088/v1/devices; echo                   # lista devices
+revoke: ; @curl -s -XPOST http://localhost:8088/v1/devices/$(DEV)/revoke; echo  # kill-switch (DEV=dev_...)
+
+# demo do enforcement (max_workers, lease TTL, kill-switch) com knobs de teste
+enforce-demo: ; @bash scripts/enforce-demo.sh

@@ -164,15 +164,22 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         Payload::Heartbeat(Heartbeat { active_leases: vec![], worker_hours_seconds: 0, workers: vec![] }),
     ))
     .await?;
-    tx.send(env_msg(
-        MsgType::LeaseRequest,
-        Payload::LeaseRequest(LeaseRequest {
-            workspace_id: "wsp_demo".into(),
-            source: WorkerSource::Pool as i32,
-            pinned_worker_id: String::new(),
-        }),
-    ))
-    .await?;
+    let lease_req = || {
+        env_msg(
+            MsgType::LeaseRequest,
+            Payload::LeaseRequest(LeaseRequest {
+                workspace_id: "wsp_demo".into(),
+                source: WorkerSource::Pool as i32,
+                pinned_worker_id: String::new(),
+            }),
+        )
+    };
+    tx.send(lease_req()).await?;
+    // M3.1: leases extras p/ exercitar a trava max_workers (o cérebro nega os excedentes)
+    let extra: usize = env::var("APIFOR_EXTRA_LEASES").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for _ in 0..extra {
+        tx.send(lease_req()).await?;
+    }
 
     let mut req = Request::new(ReceiverStream::new(rx));
     req.metadata_mut()
@@ -185,7 +192,34 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         match MsgType::try_from(env.r#type).unwrap_or(MsgType::MsgUnspecified) {
             MsgType::LeaseGranted => {
                 if let Some(Payload::LeaseGranted(g)) = &env.payload {
-                    println!("lease concedido: worker={} lease={}", g.worker_id, g.lease_id);
+                    let exp = if g.expires_at > 0 {
+                        format!("expira_em={}ms", g.expires_at)
+                    } else {
+                        "sem expiração".into()
+                    };
+                    println!(
+                        "lease concedido: worker={} lease={} {exp} auto_renew={}",
+                        g.worker_id, g.lease_id, g.auto_renew
+                    );
+                }
+            }
+            MsgType::LeaseDenied => {
+                if let Some(Payload::LeaseDenied(d)) = &env.payload {
+                    println!("LEASE NEGADO pelo cérebro: motivo={} (não vou trabalhar)", d.reason);
+                }
+            }
+            MsgType::LeaseRevoked => {
+                if let Some(Payload::LeaseRevoked(g)) = &env.payload {
+                    println!(
+                        "LEASE REVOGADO: lease={} motivo={} — worker pausado/parado pelo cérebro",
+                        g.lease_id, g.reason
+                    );
+                }
+            }
+            MsgType::StopWorker | MsgType::PauseWorker => {
+                if let Some(Payload::WorkerControl(c)) = &env.payload {
+                    let act = if c.stop { "STOP" } else { "PAUSE" };
+                    println!("{act} WORKER {} (motivo={})", c.worker_id, c.reason);
                 }
             }
             MsgType::DispatchTask => {
