@@ -229,6 +229,16 @@ export function StateBar({ title, counts }: { title: string; counts: { label: st
   );
 }
 
+// chave liga/desliga (switch)
+export function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button onClick={() => onChange(!on)} aria-pressed={on}
+      style={{ width: 42, height: 24, borderRadius: 20, border: "none", cursor: "pointer", background: on ? "var(--green)" : "var(--border)", position: "relative", transition: "background .15s", flexShrink: 0, padding: 0 }}>
+      <span style={{ position: "absolute", top: 3, left: on ? 21 : 3, width: 18, height: 18, borderRadius: 18, background: "#fff", transition: "left .15s", boxShadow: "0 1px 3px rgba(0,0,0,.3)" }} />
+    </button>
+  );
+}
+
 // linha de filtros em pílulas
 export function Pills({ options, value, onChange }: { options: [string, string][]; value: string; onChange: (v: string) => void }) {
   const [lang] = useLang();
