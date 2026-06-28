@@ -69,6 +69,7 @@ export function short(id: string, n = 16) {
 
 // ── navegação ──
 const TABS = [
+  ["/onboarding", "Início"],
   ["/", "Live"],
   ["/queue", "Fila"],
   ["/tasks", "Tarefas"],
@@ -85,6 +86,7 @@ const TABS = [
   ["/invoices", "Faturas"],
   ["/org", "Organização"],
   ["/audit", "Auditoria"],
+  ["/pricing", "Planos"],
 ];
 
 export function Nav() {
