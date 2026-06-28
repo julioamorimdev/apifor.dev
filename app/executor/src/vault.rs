@@ -151,3 +151,46 @@ pub fn fingerprint(value: &str) -> String {
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_estavel_12_hex() {
+        let f = fingerprint("sk-ant-xyz");
+        assert_eq!(f.len(), 12);
+        assert_eq!(f, fingerprint("sk-ant-xyz")); // determinístico
+        assert_ne!(f, fingerprint("outro-valor"));
+    }
+
+    #[test]
+    fn vault_roundtrip_cifrado() {
+        let dir = std::env::temp_dir().join("apifor_vault_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("APIFOR_HOME", &dir);
+
+        let v = Vault::open().expect("open");
+        let fp = v
+            .put("anthropic_api_key", "sk-ant-segredo", "anthropic_api_key")
+            .expect("put");
+        assert_eq!(fp.len(), 12);
+
+        // valor recuperado bate; o JSON em disco NÃO contém o segredo em claro
+        assert_eq!(
+            v.get("anthropic_api_key").as_deref(),
+            Some("sk-ant-segredo")
+        );
+        let disk = std::fs::read_to_string(dir.join("vault.json")).unwrap();
+        assert!(
+            !disk.contains("sk-ant-segredo"),
+            "segredo vazou em claro no disco"
+        );
+
+        assert!(v.get("inexistente").is_none());
+        assert!(v.delete("anthropic_api_key").expect("delete"));
+        assert!(v.get("anthropic_api_key").is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
