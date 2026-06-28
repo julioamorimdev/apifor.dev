@@ -147,6 +147,21 @@ export function StatCard({ label, value, suffix, tone = "accent", series, sub }:
   );
 }
 
+// card de medidor: rótulo + valor/limite + barra de progresso + sub
+export function MeterCard({ label, value, limit, pct, tone = "accent", sub }: { label: string; value: React.ReactNode; limit?: React.ReactNode; pct: number; tone?: string; sub?: string }) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  return (
+    <div style={{ ...card, padding: 16, marginBottom: 0 }}>
+      <div style={{ color: "var(--mute)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>{label}</div>
+      <div style={{ fontFamily: "var(--head)", fontWeight: 800, fontSize: 23, marginBottom: 12 }}>{value}{limit !== undefined && <span style={{ fontSize: 14, color: "var(--mute)", fontWeight: 600 }}> / {limit}</span>}</div>
+      <div style={{ height: 6, borderRadius: 6, background: "var(--border)", overflow: "hidden" }}>
+        <div style={{ width: p + "%", height: "100%", background: `var(--${tone})`, transition: "width .4s" }} />
+      </div>
+      <div style={{ color: "var(--mute)", fontSize: 12, marginTop: 8 }}>{sub ?? `${Math.round(p)}% do limite`}</div>
+    </div>
+  );
+}
+
 // ───────────────────────── navegação agrupada ─────────────────────────
 type Item = [string, string, string?]; // [href, label_pt, countKey?]
 const NAV: { key: string; items: Item[] }[] = [
