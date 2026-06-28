@@ -1,10 +1,11 @@
 "use client";
 import { Fragment, useState } from "react";
-import { apiGet, apiPost, badge, btn, card, cell, input, Page, short, tableStyle, usePoll } from "../ui";
+import { apiGet, apiPost, badge, btn, card, CardHead, cell, codeAmber, input, Page, PageHead, tableStyle, usePoll } from "../ui";
 
 type Task = { id: string; title: string; status: string; assigned_worker_id?: string };
 type Repo = { id: string; name: string };
 type Step = { idx: number; type: string; label: string; status: string };
+const th = { ...cell, color: "var(--mute)", fontSize: 11, textTransform: "uppercase" as const, letterSpacing: ".06em", fontWeight: 600 };
 
 export default function Tarefas() {
   const { data: tasks, reload } = usePoll<Task[]>("/v1/tasks");
@@ -18,15 +19,9 @@ export default function Tarefas() {
 
   async function create() {
     if (!title.trim()) return;
-    await apiPost("/v1/tasks", {
-      title,
-      prompt,
-      refs: refs.split(",").map((s) => s.trim()).filter(Boolean),
-      repo_id: repo || undefined,
-    });
+    await apiPost("/v1/tasks", { title, prompt, refs: refs.split(",").map((s) => s.trim()).filter(Boolean), repo_id: repo || undefined });
     reload();
   }
-
   async function toggle(id: string) {
     if (open === id) { setOpen(null); return; }
     setOpen(id);
@@ -36,39 +31,43 @@ export default function Tarefas() {
 
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>Nova tarefa</h3>
-      <div style={{ ...card, padding: 16, display: "grid", gap: 10 }}>
-        <input style={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="título" />
-        <textarea style={{ ...input, minHeight: 64, resize: "vertical" }} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="pedido (prompt — vira o template do relay)" />
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <input style={{ ...input, flex: 2, minWidth: 180 }} value={refs} onChange={(e) => setRefs(e.target.value)} placeholder="refs (arquivos de contexto, separados por vírgula)" />
-          <select style={{ ...input, flex: 1, minWidth: 160 }} value={repo} onChange={(e) => setRepo(e.target.value)}>
-            <option value="">(sem repo — só planeja)</option>
-            {(repos || []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-          </select>
-          <button style={btn} onClick={create}>Criar → planejar</button>
+      <PageHead eyebrow="Operação" title="Tarefas" subtitle="Crie e acompanhe as tarefas dos workers." />
+
+      <div style={card}>
+        <CardHead title="Nova tarefa" />
+        <div style={{ padding: 16, display: "grid", gap: 10 }}>
+          <input style={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="título" />
+          <textarea style={{ ...input, minHeight: 64, resize: "vertical" }} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="pedido (prompt — vira o template do relay)" />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...input, flex: 2, minWidth: 180 }} value={refs} onChange={(e) => setRefs(e.target.value)} placeholder="refs (arquivos de contexto, separados por vírgula)" />
+            <select style={{ ...input, flex: 1, minWidth: 160 }} value={repo} onChange={(e) => setRepo(e.target.value)}>
+              <option value="">(sem repo — só planeja)</option>
+              {(repos || []).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+            <button style={btn} onClick={create}>Criar → planejar</button>
+          </div>
+          <span style={{ color: "var(--mute)", fontSize: 12 }}>Com repo: planeja → clona → coda → push → PR. Sem repo: só o plano.</span>
         </div>
-        <span style={{ color: "var(--mute)", fontSize: 12 }}>Com repo: planeja → clona → coda → push → PR. Sem repo: só o plano.</span>
       </div>
 
-      <h3 style={{ color: "var(--dim)" }}>Tarefas</h3>
       <div style={card}>
+        <CardHead title="Tarefas" right={<span style={{ color: "var(--mute)", fontSize: 13 }}>{(tasks || []).length} total</span>} />
         <table style={tableStyle}>
-          <thead><tr><th style={cell}>id</th><th style={cell}>título</th><th style={cell}>status</th><th style={cell}></th></tr></thead>
+          <thead><tr><th style={th}>Tarefa</th><th style={th}>Título</th><th style={th}>Estado</th><th style={{ ...th, textAlign: "right" }}>Plano</th></tr></thead>
           <tbody>
             {(tasks || []).map((t) => (
               <Fragment key={t.id}>
                 <tr>
-                  <td style={cell}><code>{short(t.id)}</code></td>
+                  <td style={cell}><span style={codeAmber}>{t.id.slice(-8)}</span></td>
                   <td style={cell}>{t.title}</td>
                   <td style={cell}><span style={badge(t.status)}>{t.status}</span></td>
-                  <td style={cell}><a onClick={() => toggle(t.id)} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13 }}>{open === t.id ? "ocultar" : "plano"}</a></td>
+                  <td style={{ ...cell, textAlign: "right" }}><a onClick={() => toggle(t.id)} style={{ color: "var(--blue)", cursor: "pointer", fontSize: 13 }}>{open === t.id ? "ocultar" : "ver plano"}</a></td>
                 </tr>
                 {open === t.id && (
                   <tr>
-                    <td style={{ ...cell, background: "#0E1014" }} colSpan={4}>
+                    <td style={{ ...cell, background: "var(--bg)" }} colSpan={4}>
                       {steps.length ? (
-                        <ol style={{ margin: 0, paddingLeft: 20, color: "#C9CDD3" }}>
+                        <ol style={{ margin: 0, paddingLeft: 20, color: "var(--dim)", lineHeight: 1.9 }}>
                           {steps.map((s) => <li key={s.idx}><span style={badge(s.type === "exec" ? "running" : s.type)}>{s.type}</span> {s.label}</li>)}
                         </ol>
                       ) : <span style={{ color: "var(--mute)" }}>sem plano ainda</span>}

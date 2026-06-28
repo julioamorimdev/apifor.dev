@@ -52,6 +52,69 @@ export const card = { background: "var(--card)", border: "1px solid var(--border
 export const input = { background: "var(--bg)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 11px", fontSize: 14, outline: "none" };
 export const btn = { background: "var(--accent)", color: "var(--accent-ink)", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: "pointer", fontSize: 14 };
 export function short(id: string, n = 16) { return id.length > n ? id.slice(0, n) + "…" : id; }
+export const codeAmber = { fontFamily: "var(--mono)", color: "var(--accent)", fontSize: 13, fontWeight: 600 } as const;
+export const codeDim = { fontFamily: "var(--mono)", color: "var(--mute)", fontSize: 12.5 } as const;
+
+// cabeçalho de página: eyebrow + título grande + subtítulo (+ ações à direita)
+export function PageHead({ eyebrow, title, subtitle, right }: { eyebrow?: string; title: string; subtitle?: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 20, gap: 16, flexWrap: "wrap" }}>
+      <div>
+        {eyebrow && <div style={{ color: "var(--mute)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".09em", marginBottom: 5 }}>{eyebrow}</div>}
+        <h1 style={{ margin: 0, fontSize: 26 }}>{title}</h1>
+        {subtitle && <div style={{ color: "var(--dim)", fontSize: 14, marginTop: 6 }}>{subtitle}</div>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+// cabeçalho dentro de um card
+export function CardHead({ title, right }: { title: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", borderBottom: "1px solid var(--border)" }}>
+      <b style={{ fontFamily: "var(--head)", fontSize: 13.5, letterSpacing: "-.01em" }}>{title}</b>
+      {right}
+    </div>
+  );
+}
+
+// barra empilhada de estado + legenda (ex.: "Estado das tarefas")
+export function StateBar({ title, counts }: { title: string; counts: { label: string; n: number; tone: string }[] }) {
+  const total = counts.reduce((a, c) => a + c.n, 0);
+  return (
+    <div style={{ ...card, padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <b style={{ fontFamily: "var(--head)", fontSize: 14 }}>{title}</b>
+        <span style={{ color: "var(--mute)", fontSize: 13 }}>{total} no pipeline</span>
+      </div>
+      <div style={{ display: "flex", height: 8, borderRadius: 6, overflow: "hidden", background: "var(--border)", marginBottom: 16 }}>
+        {counts.filter((c) => c.n).map((c, i) => <div key={i} style={{ flex: c.n, background: `var(--${c.tone})` }} />)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "9px 28px" }}>
+        {counts.map((c, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13 }}>
+            <span style={{ color: "var(--dim)", display: "flex", alignItems: "center", gap: 8 }}><span style={{ width: 8, height: 8, borderRadius: 8, background: `var(--${c.tone})` }} />{c.label}</span>
+            <b>{c.n}</b>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// linha de filtros em pílulas
+export function Pills({ options, value, onChange }: { options: [string, string][]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 9, padding: 3 }}>
+      {options.map(([val, label]) => (
+        <button key={val} onClick={() => onChange(val)}
+          style={{ border: "none", cursor: "pointer", borderRadius: 7, padding: "5px 12px", fontSize: 13, fontWeight: 500,
+            background: value === val ? "var(--card)" : "transparent", color: value === val ? "var(--ink)" : "var(--dim)" }}>{label}</button>
+      ))}
+    </div>
+  );
+}
 
 // ───────────────────────── navegação agrupada ─────────────────────────
 type Item = [string, string, string?]; // [href, label_pt, countKey?]
