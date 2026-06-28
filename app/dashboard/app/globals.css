@@ -73,6 +73,11 @@ input, select, button, textarea { font-family: inherit; }
 .apf-link:hover { background: var(--elev); color: var(--ink); }
 .apf-iconbtn { transition: background .12s, color .12s, transform .12s; }
 .apf-iconbtn:hover { background: var(--elev); color: var(--ink); }
+/* item de navegação inativo: destaque no hover (inclui o ícone) */
+.apf-navitem { color: var(--dim); transition: background .13s, color .13s; }
+.apf-navitem svg { transition: stroke .13s; }
+.apf-navitem:hover { background: var(--elev); color: var(--ink); }
+.apf-navitem:hover svg { stroke: var(--ink); }
 button { transition: transform .12s ease, filter .12s ease, background .12s, color .12s, opacity .12s; }
 button:not(:disabled):active { transform: translateY(1px); }
 button:not(:disabled):hover { filter: brightness(1.06); }
