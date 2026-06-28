@@ -25,7 +25,7 @@ const STR: Record<string, Record<string, string>> = {
 const EN_LABEL: Record<string, string> = {
   "/": "Dashboard", "/live": "Live", "/queue": "Queue", "/tasks": "Tasks", "/prs": "Pull Requests", "/interventions": "Intervention",
   "/ci": "CI", "/qa": "QA", "/routines": "Routines", "/telemetry": "Telemetry", "/knowledge": "Knowledge",
-  "/config": "Settings", "/audit": "Audit", "/org": "Organization", "/usage": "Usage", "/invoices": "Invoices", "/pricing": "Plans",
+  "/logs": "Logs", "/config": "Settings", "/audit": "Audit", "/org": "Organization", "/usage": "Usage", "/invoices": "Invoices", "/pricing": "Plans",
 };
 export function useLang(): [string, (l: string) => void] {
   const [lang, set] = useState("pt");
@@ -166,7 +166,7 @@ export function MeterCard({ label, value, limit, pct, tone = "accent", sub }: { 
 // ───────────────────────── navegação agrupada ─────────────────────────
 type Item = [string, string, string?]; // [href, label_pt, countKey?]
 const NAV: { key: string; items: Item[] }[] = [
-  { key: "op", items: [["/", "Dashboard"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"], ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"], ["/live", "Live", "workers"], ["/ci", "CI"], ["/qa", "QA"], ["/routines", "Rotinas"], ["/telemetry", "Telemetria"]] },
+  { key: "op", items: [["/", "Dashboard"], ["/queue", "Fila", "queue"], ["/tasks", "Tarefas"], ["/prs", "Pull Requests", "prs"], ["/interventions", "Intervenção", "interv"], ["/live", "Live", "workers"], ["/ci", "CI"], ["/qa", "QA"], ["/routines", "Rotinas"], ["/telemetry", "Telemetria"], ["/logs", "Logs"]] },
   { key: "sys", items: [["/knowledge", "Conhecimento"], ["/config", "Configuração"], ["/audit", "Auditoria"]] },
   { key: "acct", items: [["/org", "Organização"], ["/usage", "Uso"], ["/invoices", "Faturas"], ["/pricing", "Planos"]] },
 ];
@@ -218,6 +218,7 @@ const ICONS: Record<string, string[]> = {
   "/qa": ["M22 11.08V12a10 10 0 1 1-5.93-9.14", "M22 4L12 14.01l-3-3"],
   "/routines": ["M17 1l4 4-4 4", "M3 11V9a4 4 0 0 1 4-4h14", "M7 23l-4-4 4-4", "M21 13v2a4 4 0 0 1-4 4H3"],
   "/telemetry": ["M3 3v18h18", "M18 17V9", "M13 17V5", "M8 17v-3"],
+  "/logs": ["M4 17l6-6-6-6", "M12 19h8"],
   "/knowledge": ["M4 19.5A2.5 2.5 0 0 1 6.5 17H20", "M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"],
   "/config": ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"],
   "/audit": ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],

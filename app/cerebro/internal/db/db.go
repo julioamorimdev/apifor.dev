@@ -1231,6 +1231,14 @@ func (d *DB) SavePlan(ctx context.Context, taskID string, steps []PlanStepIn, to
 	return err
 }
 
+// ListLogs — feed de logs do pipeline (steps com output), RLS-escopado por org (via_task).
+func (d *DB) ListLogs(ctx context.Context, orgID string) ([]Row, error) {
+	return d.orgList(ctx, orgID, `SELECT to_char(COALESCE(s.ended_at,s.started_at,now()),'YYYY-MM-DD HH24:MI:SS') AS "when",
+		s.task_id AS task_id, s.type::text AS type, s.status::text AS status, COALESCE(s.output->>'log','') AS log
+		FROM step s WHERE s.status <> 'pending'
+		ORDER BY COALESCE(s.ended_at,s.started_at) DESC NULLS LAST LIMIT 100`)
+}
+
 // ListSteps continua no pool superuser (filtra por task_id; RLS via_task cobre).
 func (d *DB) ListSteps(ctx context.Context, taskID string) ([]Row, error) {
 	rows, err := d.Pool.Query(ctx, `SELECT idx,type,COALESCE(label,''),status

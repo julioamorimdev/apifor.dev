@@ -77,6 +77,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/routines", a.routines)                 // GET lista, POST cria (write)
 	mux.HandleFunc("/v1/routines/", a.routineAction)           // POST /{id}/run|enable|disable, DELETE /{id}
 	mux.HandleFunc("/v1/ci", a.ci)                             // GET ci_runs
+	mux.HandleFunc("/v1/logs", a.logs)                         // GET feed de logs (steps)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
 	mux.HandleFunc("/v1/telemetry", a.telemetry)               // GET agregado
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
@@ -734,6 +735,15 @@ func (a *API) routineAction(w http.ResponseWriter, r *http.Request) {
 // ci/qa/telemetry: telas read-only do M4.3.
 func (a *API) ci(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.ListCI(r.Context(), a.orgFrom(r))
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) logs(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.ListLogs(r.Context(), a.orgFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
