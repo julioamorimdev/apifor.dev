@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { apiGet, card, Page } from "../ui";
+import { Page, PageHead, apiGet, card } from "../ui";
 
 type Tel = {
   tasks_total: number; tasks_merged: number; tasks_failed: number; tasks_active: number;
@@ -27,7 +27,7 @@ export default function Telemetria() {
 
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>Telemetria <span style={{ color: "var(--mute)", fontSize: 13 }}>(agregado da org)</span></h3>
+      <PageHead eyebrow="Operação" title="Telemetria" subtitle="Métricas agregadas da org." />
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
         <Metric label="Tarefas" value={t?.tasks_total ?? 0} />
         <Metric label="Merged" value={t?.tasks_merged ?? 0} color="var(--green)" />

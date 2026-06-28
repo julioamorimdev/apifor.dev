@@ -1,5 +1,5 @@
 "use client";
-import { badge, card, cell, Page, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, badge, card, cell, tableStyle, usePoll } from "../ui";
 
 type Invoice = { stripe_invoice_id: string; amount_cents: number; currency: string; status: string; date: string; pdf_url: string };
 
@@ -10,7 +10,7 @@ export default function Faturas() {
 
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>Faturas <span style={{ color: "var(--mute)", fontSize: 13 }}>(via webhooks do Stripe)</span></h3>
+      <PageHead eyebrow="Conta & cobrança" title="Faturas" subtitle="Faturas emitidas (webhooks do Stripe)." />
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>data</th><th style={cell}>valor</th><th style={cell}>status</th><th style={cell}>stripe id</th><th style={cell}>pdf</th></tr></thead>

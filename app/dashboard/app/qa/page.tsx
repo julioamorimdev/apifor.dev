@@ -1,5 +1,5 @@
 "use client";
-import { badge, card, cell, Page, short, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, badge, card, cell, short, tableStyle, usePoll } from "../ui";
 
 type QA = { id: string; task_id: string; status: string; tests_total: number; tests_passed: number; date: string };
 
@@ -7,7 +7,7 @@ export default function QATela() {
   const { data: reports } = usePoll<QA[]>("/v1/qa", 2500);
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>QA <span style={{ color: "var(--mute)", fontSize: 13 }}>(relatórios de teste)</span></h3>
+      <PageHead eyebrow="Operação" title="QA" subtitle="Relatórios de teste." />
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>task</th><th style={cell}>status</th><th style={cell}>testes</th><th style={cell}>data</th></tr></thead>

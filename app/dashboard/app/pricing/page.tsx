@@ -1,5 +1,5 @@
 "use client";
-import { apiPost, btn, card, Page } from "../ui";
+import { Page, PageHead, apiPost, btn, card } from "../ui";
 
 type Plan = { key: string; name: string; price: string; highlight?: boolean; feats: string[] };
 const PLANS: Plan[] = [
@@ -19,7 +19,7 @@ export default function Pricing() {
   }
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>Planos <span style={{ color: "var(--mute)", fontSize: 13 }}>(freemium — comece no Free, suba quando precisar)</span></h3>
+      <PageHead eyebrow="Conta & cobrança" title="Planos" subtitle="Comece no Free, suba quando precisar." />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
         {PLANS.map((p) => (
           <div key={p.key} style={{ ...card, padding: 18, border: p.highlight ? "1px solid var(--accent)" : "1px solid var(--border)" }}>

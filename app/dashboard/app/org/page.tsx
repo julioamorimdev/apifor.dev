@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { apiDelete, apiGet, apiPost, badge, btn, card, cell, input, Page, setToken, tableStyle } from "../ui";
+import { Page, PageHead, apiDelete, apiGet, apiPost, badge, btn, card, cell, input, setToken, tableStyle } from "../ui";
 
 type Me = { org_id: string; role: string };
 type Member = { id: string; email: string; name: string; role: string; status: string };
@@ -39,6 +39,7 @@ export default function Org() {
 
   return (
     <Page>
+      <PageHead eyebrow="Conta & cobrança" title="Organização" subtitle="Sessão, membros e workspaces." />
       <h3 style={{ color: "var(--dim)" }}>Sessão</h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ color: "var(--mute)" }}>org:</span> <code>{me?.org_id || "—"}</code>

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { apiDelete, apiPost, badge, btn, card, cell, input, Page, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, apiDelete, apiPost, badge, btn, card, cell, input, tableStyle, usePoll } from "../ui";
 
 type Routine = {
   id: string; name: string; trigger: string; interval_sec: number;
@@ -27,6 +27,7 @@ export default function Rotinas() {
 
   return (
     <Page>
+      <PageHead eyebrow="Operação" title="Rotinas" subtitle="Gatilhos agendados e manuais." />
       <h3 style={{ color: "var(--dim)" }}>Nova rotina</h3>
       <div style={{ ...card, padding: 16, display: "grid", gap: 10 }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

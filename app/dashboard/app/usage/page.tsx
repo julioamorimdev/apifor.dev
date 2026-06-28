@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost, badge, btn, card, cell, Page, short, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, apiGet, apiPost, badge, btn, card, cell, short, tableStyle, usePoll } from "../ui";
 
 type Usage = {
   plan: string;
@@ -38,6 +38,7 @@ export default function UsoTela() {
 
   return (
     <Page>
+      <PageHead eyebrow="Conta & cobrança" title="Uso" subtitle="Assinatura, limites e dispositivos." />
       <h3 style={{ color: "var(--dim)" }}>Assinatura</h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ color: "var(--mute)" }}>plano:</span>

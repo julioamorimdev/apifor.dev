@@ -1,5 +1,5 @@
 "use client";
-import { apiPost, badge, btn, card, cell, Page, short, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, apiPost, badge, btn, card, cell, short, tableStyle, usePoll } from "../ui";
 
 type Intervention = { task_id: string; title: string; branch: string; ci_status: string; ai_review_status: string };
 
@@ -13,7 +13,7 @@ export default function Intervencao() {
 
   return (
     <Page>
-      <h3 style={{ color: "var(--dim)" }}>Intervenção <span style={{ color: "var(--mute)", fontSize: 13 }}>(gate de revisão humana — destrava o merge)</span></h3>
+      <PageHead eyebrow="Operação" title="Intervenção" subtitle="Gate de revisão humana — destrava o merge." />
       <div style={card}>
         <table style={tableStyle}>
           <thead><tr><th style={cell}>tarefa</th><th style={cell}>branch</th><th style={cell}>CI</th><th style={cell}>review IA</th><th style={cell}>decisão</th></tr></thead>

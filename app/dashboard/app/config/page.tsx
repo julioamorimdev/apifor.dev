@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { apiPost, btn, card, cell, input, Page, short, tableStyle, usePoll } from "../ui";
+import { Page, PageHead, apiPost, btn, card, cell, input, short, tableStyle, usePoll } from "../ui";
 
 type Repo = { id: string; name: string; default_branch: string; clone_url: string };
 type Secret = { id: string; name: string; type: string; fingerprint: string; location: string };
@@ -20,6 +20,7 @@ export default function Config() {
 
   return (
     <Page>
+      <PageHead eyebrow="Conhecimento & sistema" title="Configuração" subtitle="Repositórios e segredos." />
       <h3 style={{ color: "var(--dim)" }}>Repositórios</h3>
       <div style={{ ...card, padding: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
         <input style={{ ...input, flex: 1, minWidth: 120 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="nome" />
