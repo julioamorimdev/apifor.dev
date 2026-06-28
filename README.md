@@ -35,6 +35,7 @@ Travas (lease, limite de workers, 36h/sem, kill-switch) são **server-side** —
 | [SCHEMA-DADOS.md](SCHEMA-DADOS.md) | modelo de dados (server + local) |
 | [PROTOCOLO.md](PROTOCOLO.md) | protocolo cérebro↔executor (gRPC) |
 | [API.md](API.md) | REST `/v1` + IPC local |
+| [OVERVIEW.md](OVERVIEW.md) | visão geral do projeto (arquitetura, marcos, status) |
 | [ROADMAP.md](ROADMAP.md) | marcos de construção M0→M7 |
 | [SECURITY.md](SECURITY.md) | review de segurança (mTLS, vault, kill-switch, RBAC, RLS) |
 | [PRODUCTION.md](PRODUCTION.md) | deploy de produção (perfil endurecido + checklist) |
