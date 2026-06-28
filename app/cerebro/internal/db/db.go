@@ -15,17 +15,74 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-type DB struct{ Pool *pgxpool.Pool }
+// DB tem dois pools: Pool (superuser — writes + workers cross-org, bypassa RLS) e
+// App (role apifor_app — reads do REST, com RLS aplicado por org). M6.3.
+type DB struct {
+	Pool *pgxpool.Pool
+	App  *pgxpool.Pool
+}
 
-func Open(ctx context.Context, url string) (*DB, error) {
-	pool, err := pgxpool.New(ctx, url)
+func Open(ctx context.Context, sysURL, appURL string) (*DB, error) {
+	pool, err := pgxpool.New(ctx, sysURL)
 	if err != nil {
 		return nil, err
 	}
 	if err := pool.Ping(ctx); err != nil {
 		return nil, err
 	}
-	return &DB{Pool: pool}, nil
+	d := &DB{Pool: pool, App: pool}
+	// App pool é opcional: sem ele, os reads caem no pool superuser (RLS não aplica).
+	if appURL != "" {
+		if ap, err := pgxpool.New(ctx, appURL); err == nil && ap.Ping(ctx) == nil {
+			d.App = ap
+		}
+	}
+	return d, nil
+}
+
+// withOrg roda fn numa transação no pool da app com a org corrente setada
+// (RLS isola por current_org()). Usado pelos reads do REST.
+func (d *DB) withOrg(ctx context.Context, orgID string, fn func(pgx.Tx) error) error {
+	tx, err := d.App.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org',$1,true)`, orgID); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// orgList roda um SELECT org-escopado (RLS) e mapeia cada linha em Row pelos nomes
+// das colunas (use aliases no SQL p/ casar as chaves do JSON). Sem WHERE org_id —
+// quem isola é o RLS.
+func (d *DB) orgList(ctx context.Context, orgID, sql string, args ...any) ([]Row, error) {
+	var out []Row
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, sql, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		fields := rows.FieldDescriptions()
+		for rows.Next() {
+			vals, err := rows.Values()
+			if err != nil {
+				return err
+			}
+			r := Row{}
+			for i, f := range fields {
+				r[string(f.Name)] = vals[i]
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 func NewID(prefix string) string { return prefix + "_" + strings.ToLower(ulid.Make().String()) }
@@ -128,22 +185,10 @@ func (d *DB) ListAudit(ctx context.Context, orgID string, limit int) ([]Row, err
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := d.Pool.Query(ctx, `SELECT to_char(occurred_at,'YYYY-MM-DD HH24:MI:SS'),actor_type::text,COALESCE(actor_id,''),
-		action,COALESCE(target_type,''),COALESCE(target_id,'')
-		FROM audit_log WHERE org_id=$1 ORDER BY occurred_at DESC LIMIT $2`, orgID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var when, at, aid, action, tt, tid string
-		if err := rows.Scan(&when, &at, &aid, &action, &tt, &tid); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"when": when, "actor_type": at, "actor_id": aid, "action": action, "target_type": tt, "target_id": tid})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT to_char(occurred_at,'YYYY-MM-DD HH24:MI:SS') AS "when",
+		actor_type::text AS actor_type,COALESCE(actor_id,'') AS actor_id,action,
+		COALESCE(target_type,'') AS target_type,COALESCE(target_id,'') AS target_id
+		FROM audit_log ORDER BY occurred_at DESC LIMIT $1`, limit)
 }
 
 // GetOrgPlan devolve o plano da org (p/ rate limit por plano).
@@ -188,23 +233,9 @@ func (d *DB) CreateNotification(ctx context.Context, orgID, ntype, title, body, 
 }
 
 func (d *DB) ListNotifications(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(type,''),COALESCE(title,''),COALESCE(body,''),COALESCE(link,''),read,
-		to_char(created_at,'YYYY-MM-DD HH24:MI:SS')
-		FROM notification WHERE org_id=$1 ORDER BY created_at DESC LIMIT 50`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, t, title, body, link, date string
-		var read bool
-		if err := rows.Scan(&id, &t, &title, &body, &link, &read, &date); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "type": t, "title": title, "body": body, "link": link, "read": read, "date": date})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,COALESCE(type,'') AS type,COALESCE(title,'') AS title,
+		COALESCE(body,'') AS body,COALESCE(link,'') AS link,read,
+		to_char(created_at,'YYYY-MM-DD HH24:MI:SS') AS date FROM notification ORDER BY created_at DESC LIMIT 50`)
 }
 
 func (d *DB) UnreadCount(ctx context.Context, orgID string) int {
@@ -234,21 +265,8 @@ func (d *DB) CreateMemory(ctx context.Context, orgID, wspID, scope, repoID, inst
 }
 
 func (d *DB) ListMemories(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,scope::text,COALESCE(repo_id,''),instruction,source::text
-		FROM memory WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, scope, repo, instr, src string
-		if err := rows.Scan(&id, &scope, &repo, &instr, &src); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "scope": scope, "repo_id": repo, "instruction": instr, "source": src})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,scope::text AS scope,COALESCE(repo_id,'') AS repo_id,
+		instruction,source::text AS source FROM memory ORDER BY created_at DESC`)
 }
 
 // MemoriesForTask devolve as instruções aplicáveis (global + as do repo) — p/ injetar no plano.
@@ -303,22 +321,8 @@ func (d *DB) CreateKBDoc(ctx context.Context, orgID, wspID, name, category, file
 }
 
 func (d *DB) ListKBDocs(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,name,category::text,COALESCE(file_ref,''),indexed
-		FROM kb_document WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, name, cat, ref string
-		var idx bool
-		if err := rows.Scan(&id, &name, &cat, &ref, &idx); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "name": name, "category": cat, "file_ref": ref, "indexed": idx})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,name,category::text AS category,COALESCE(file_ref,'') AS file_ref,
+		indexed FROM kb_document ORDER BY created_at DESC`)
 }
 
 // ── M5.2: rotinas (schedule/manual -> cria tarefa) ──
@@ -346,24 +350,10 @@ func (d *DB) CreateRoutine(ctx context.Context, orgID, wspID, name, triggerType 
 }
 
 func (d *DB) ListRoutines(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,name,trigger_type::text,COALESCE((trigger_config->>'interval_sec')::int,0),
-		enabled,COALESCE(to_char(last_run_at,'YYYY-MM-DD HH24:MI:SS'),''),COALESCE(action->>'title','')
-		FROM routine WHERE org_id=$1 ORDER BY created_at`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, name, tt, last, title string
-		var interval int
-		var enabled bool
-		if err := rows.Scan(&id, &name, &tt, &interval, &enabled, &last, &title); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "name": name, "trigger": tt, "interval_sec": interval, "enabled": enabled, "last_run": last, "action_title": title})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,name,trigger_type::text AS trigger,
+		COALESCE((trigger_config->>'interval_sec')::int,0) AS interval_sec,enabled,
+		COALESCE(to_char(last_run_at,'YYYY-MM-DD HH24:MI:SS'),'') AS last_run,
+		COALESCE(action->>'title','') AS action_title FROM routine ORDER BY created_at`)
 }
 
 // RoutineDue é uma rotina agendada vencida (pronta p/ disparar).
@@ -484,21 +474,9 @@ func (d *DB) AddMember(ctx context.Context, orgID, email, name, hash, role strin
 }
 
 func (d *DB) ListMembers(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT m.id,u.email,COALESCE(u.name,''),m.permission_tier::text,m.status::text
-		FROM membership m JOIN app_user u ON u.id=m.user_id WHERE m.org_id=$1 ORDER BY m.created_at`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, email, name, role, st string
-		if err := rows.Scan(&id, &email, &name, &role, &st); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "email": email, "name": name, "role": role, "status": st})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT m.id,u.email,COALESCE(u.name,'') AS name,
+		m.permission_tier::text AS role,m.status::text AS status
+		FROM membership m JOIN app_user u ON u.id=m.user_id ORDER BY m.created_at`)
 }
 
 func (d *DB) RemoveMember(ctx context.Context, orgID, membershipID string) error {
@@ -520,20 +498,7 @@ func (d *DB) CreateWorkspace(ctx context.Context, orgID, name string) (string, e
 }
 
 func (d *DB) ListWorkspaces(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,name,COALESCE(initial,'') FROM workspace WHERE org_id=$1 ORDER BY created_at`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, name, init string
-		if err := rows.Scan(&id, &name, &init); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "name": name, "initial": init})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,name,COALESCE(initial,'') AS initial FROM workspace ORDER BY created_at`)
 }
 
 // FirstWorkspace devolve o workspace default da org (p/ escopar tarefas/repos).
@@ -651,21 +616,8 @@ func (d *DB) CreateRepo(ctx context.Context, orgID, wspID, name, cloneURL, defau
 }
 
 func (d *DB) ListRepos(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,name,default_branch,COALESCE(settings->>'clone_url','')
-		FROM repository WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, name, branch, url string
-		if err := rows.Scan(&id, &name, &branch, &url); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "name": name, "default_branch": branch, "clone_url": url})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,name,default_branch,
+		COALESCE(settings->>'clone_url','') AS clone_url FROM repository ORDER BY created_at DESC`)
 }
 
 // TaskRepo é o repo associado a uma tarefa (vazio se não houver).
@@ -756,42 +708,15 @@ func (d *DB) CreateQAReport(ctx context.Context, taskID string, passed bool, sum
 }
 
 func (d *DB) ListCI(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT c.id,COALESCE(c.provider,''),c.status::text,COALESCE(p.task_id,''),
-		COALESCE(to_char(c.finished_at,'YYYY-MM-DD HH24:MI:SS'),'')
-		FROM ci_run c JOIN pull_request p ON p.id=c.pr_id WHERE p.org_id=$1 ORDER BY c.started_at DESC LIMIT 50`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, prov, st, task, fin string
-		if err := rows.Scan(&id, &prov, &st, &task, &fin); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "provider": prov, "status": st, "task_id": task, "finished_at": fin})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT c.id,COALESCE(c.provider,'') AS provider,c.status::text AS status,
+		COALESCE(p.task_id,'') AS task_id,COALESCE(to_char(c.finished_at,'YYYY-MM-DD HH24:MI:SS'),'') AS finished_at
+		FROM ci_run c JOIN pull_request p ON p.id=c.pr_id ORDER BY c.started_at DESC LIMIT 50`)
 }
 
 func (d *DB) ListQA(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(task_id,''),COALESCE(status,''),COALESCE(tests_total,0),
-		COALESCE(tests_passed,0),to_char(created_at,'YYYY-MM-DD HH24:MI')
-		FROM qa_report WHERE org_id=$1 ORDER BY created_at DESC LIMIT 50`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, task, st, date string
-		var total, passed int
-		if err := rows.Scan(&id, &task, &st, &total, &passed, &date); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "task_id": task, "status": st, "tests_total": total, "tests_passed": passed, "date": date})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,COALESCE(task_id,'') AS task_id,COALESCE(status,'') AS status,
+		COALESCE(tests_total,0) AS tests_total,COALESCE(tests_passed,0) AS tests_passed,
+		to_char(created_at,'YYYY-MM-DD HH24:MI') AS date FROM qa_report ORDER BY created_at DESC LIMIT 50`)
 }
 
 // Telemetry — agregado por org (tarefas por estado, tokens, PRs, worker-hours/sem).
@@ -919,42 +844,17 @@ func (d *DB) RecordStepOutput(ctx context.Context, taskID, stepType, status, out
 
 // ListInterventions: tarefas bloqueadas aguardando revisão humana (gate de merge).
 func (d *DB) ListInterventions(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT t.id,t.title,COALESCE(p.branch,''),COALESCE(p.ci_status::text,''),COALESCE(p.ai_review_status::text,'')
+	return d.orgList(ctx, orgID, `SELECT t.id AS task_id,t.title,COALESCE(p.branch,'') AS branch,
+		COALESCE(p.ci_status::text,'') AS ci_status,COALESCE(p.ai_review_status::text,'') AS ai_review_status
 		FROM task t LEFT JOIN pull_request p ON p.task_id=t.id
-		WHERE t.org_id=$1 AND t.status='blocked' AND t.blocked_reason='human_review' ORDER BY t.created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, title, branch, ci, ai string
-		if err := rows.Scan(&id, &title, &branch, &ci, &ai); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"task_id": id, "title": title, "branch": branch, "ci_status": ci, "ai_review_status": ai})
-	}
-	return out, rows.Err()
+		WHERE t.status='blocked' AND t.blocked_reason='human_review' ORDER BY t.created_at DESC`)
 }
 
 func (d *DB) ListPRs(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,COALESCE(task_id,''),COALESCE(branch,''),COALESCE(url,''),status,
-		ci_status::text,ai_review_status::text,human_review_status::text
-		FROM pull_request WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, task, branch, url, st, ci, ai, human string
-		if err := rows.Scan(&id, &task, &branch, &url, &st, &ci, &ai, &human); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "task_id": task, "branch": branch, "url": url, "status": st,
-			"ci_status": ci, "ai_review_status": ai, "human_review_status": human})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,COALESCE(task_id,'') AS task_id,COALESCE(branch,'') AS branch,
+		COALESCE(url,'') AS url,status::text AS status,ci_status::text AS ci_status,
+		ai_review_status::text AS ai_review_status,human_review_status::text AS human_review_status
+		FROM pull_request ORDER BY created_at DESC`)
 }
 
 func jsonStr(s string) string {
@@ -1283,6 +1183,7 @@ func (d *DB) SavePlan(ctx context.Context, taskID string, steps []PlanStepIn, to
 	return err
 }
 
+// ListSteps continua no pool superuser (filtra por task_id; RLS via_task cobre).
 func (d *DB) ListSteps(ctx context.Context, taskID string) ([]Row, error) {
 	rows, err := d.Pool.Query(ctx, `SELECT idx,type,COALESCE(label,''),status
 		FROM step WHERE task_id=$1 ORDER BY idx`, taskID)
@@ -1311,58 +1212,21 @@ func (d *DB) CreateSecretRef(ctx context.Context, orgID, name, typ, fingerprint 
 }
 
 func (d *DB) ListSecrets(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,name,COALESCE(type,''),COALESCE(fingerprint,''),location
-		FROM secret_ref WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, name, typ, fp, loc string
-		if err := rows.Scan(&id, &name, &typ, &fp, &loc); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "name": name, "type": typ, "fingerprint": fp, "location": loc})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,name,COALESCE(type,'') AS type,COALESCE(fingerprint,'') AS fingerprint,
+		location::text AS location FROM secret_ref ORDER BY created_at DESC`)
 }
 
 // Leitura p/ a UI.
 type Row = map[string]any
 
+// Reads do REST: RLS-escopados (sem WHERE org_id — quem isola é o RLS via_org).
 func (d *DB) ListWorkers(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,source,host,status,COALESCE(current_task_id,''),COALESCE(current_step,'')
-		FROM worker_instance WHERE org_id=$1 ORDER BY created_at DESC`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, src, host, st, task, step string
-		if err := rows.Scan(&id, &src, &host, &st, &task, &step); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "source": src, "host": host, "status": st, "current_task_id": task, "current_step": step})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,source::text AS source,host::text AS host,status::text AS status,
+		COALESCE(current_task_id,'') AS current_task_id,COALESCE(current_step,'') AS current_step
+		FROM worker_instance ORDER BY created_at DESC`)
 }
 
 func (d *DB) ListTasks(ctx context.Context, orgID string) ([]Row, error) {
-	rows, err := d.Pool.Query(ctx, `SELECT id,title,status,COALESCE(assigned_worker_id,'')
-		FROM task WHERE org_id=$1 ORDER BY created_at DESC LIMIT 50`, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Row
-	for rows.Next() {
-		var id, title, st, w string
-		if err := rows.Scan(&id, &title, &st, &w); err != nil {
-			return nil, err
-		}
-		out = append(out, Row{"id": id, "title": title, "status": st, "assigned_worker_id": w})
-	}
-	return out, rows.Err()
+	return d.orgList(ctx, orgID, `SELECT id,title,status::text AS status,
+		COALESCE(assigned_worker_id,'') AS assigned_worker_id FROM task ORDER BY created_at DESC LIMIT 50`)
 }
