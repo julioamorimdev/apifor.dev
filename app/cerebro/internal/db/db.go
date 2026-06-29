@@ -478,7 +478,8 @@ func (d *DB) CreateRoutine(ctx context.Context, orgID, wspID, name, triggerType 
 func (d *DB) ListRoutines(ctx context.Context, orgID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,name,trigger_type::text AS trigger,
 		COALESCE((trigger_config->>'interval_sec')::int,0) AS interval_sec,enabled,
-		COALESCE(to_char(last_run_at,'YYYY-MM-DD HH24:MI:SS'),'') AS last_run,
+		COALESCE(to_char(last_run_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'') AS last_run,
+		COALESCE(to_char(next_run_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'') AS next_run,
 		COALESCE(action->>'title','') AS action_title FROM routine ORDER BY created_at`)
 }
 
@@ -858,14 +859,18 @@ func (d *DB) CreateQAReport(ctx context.Context, taskID string, passed bool, sum
 
 func (d *DB) ListCI(ctx context.Context, orgID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT c.id,COALESCE(c.provider,'') AS provider,c.status::text AS status,
-		COALESCE(p.task_id,'') AS task_id,COALESCE(to_char(c.finished_at,'YYYY-MM-DD HH24:MI:SS'),'') AS finished_at
+		COALESCE(p.task_id,'') AS task_id,COALESCE(p.branch,'') AS branch,COALESCE(p.repo_id,'') AS repo_id,
+		COALESCE(to_char(c.finished_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'') AS finished_at
 		FROM ci_run c JOIN pull_request p ON p.id=c.pr_id ORDER BY c.started_at DESC LIMIT 50`)
 }
 
 func (d *DB) ListQA(ctx context.Context, orgID string) ([]Row, error) {
-	return d.orgList(ctx, orgID, `SELECT id,COALESCE(task_id,'') AS task_id,COALESCE(status,'') AS status,
-		COALESCE(tests_total,0) AS tests_total,COALESCE(tests_passed,0) AS tests_passed,
-		to_char(created_at,'YYYY-MM-DD HH24:MI') AS date FROM qa_report ORDER BY created_at DESC LIMIT 50`)
+	return d.orgList(ctx, orgID, `SELECT q.id,COALESCE(q.task_id,'') AS task_id,COALESCE(q.status,'') AS status,
+		COALESCE(q.tests_total,0) AS tests_total,COALESCE(q.tests_passed,0) AS tests_passed,
+		COALESCE(q.coverage,0) AS coverage,COALESCE(q.duration_ms,0) AS duration_ms,
+		COALESCE(q.repo_id,'') AS repo_id,COALESCE(p.branch,'') AS branch,
+		to_char(q.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
+		FROM qa_report q LEFT JOIN pull_request p ON p.id=q.pr_id ORDER BY q.created_at DESC LIMIT 50`)
 }
 
 // Telemetry — agregado por org (tarefas por estado, tokens, PRs, worker-hours/sem).
@@ -1003,15 +1008,18 @@ func (d *DB) RecordStepOutput(ctx context.Context, taskID, stepType, status, out
 // ListInterventions: tarefas bloqueadas aguardando revisão humana (gate de merge).
 func (d *DB) ListInterventions(ctx context.Context, orgID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT t.id AS task_id,t.title,COALESCE(p.branch,'') AS branch,
-		COALESCE(p.ci_status::text,'') AS ci_status,COALESCE(p.ai_review_status::text,'') AS ai_review_status
+		COALESCE(p.ci_status::text,'') AS ci_status,COALESCE(p.ai_review_status::text,'') AS ai_review_status,
+		to_char(t.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
 		FROM task t LEFT JOIN pull_request p ON p.task_id=t.id
 		WHERE t.status='blocked' AND t.blocked_reason='human_review' ORDER BY t.created_at DESC`)
 }
 
 func (d *DB) ListPRs(ctx context.Context, orgID string) ([]Row, error) {
-	return d.orgList(ctx, orgID, `SELECT id,COALESCE(task_id,'') AS task_id,COALESCE(branch,'') AS branch,
-		COALESCE(url,'') AS url,status::text AS status,ci_status::text AS ci_status,
-		ai_review_status::text AS ai_review_status,human_review_status::text AS human_review_status
+	return d.orgList(ctx, orgID, `SELECT id,COALESCE(task_id,'') AS task_id,COALESCE(repo_id,'') AS repo_id,
+		COALESCE(branch,'') AS branch,COALESCE(url,'') AS url,status::text AS status,
+		ci_status::text AS ci_status,ai_review_status::text AS ai_review_status,
+		human_review_status::text AS human_review_status,
+		to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
 		FROM pull_request ORDER BY created_at DESC`)
 }
 
@@ -1401,5 +1409,6 @@ func (d *DB) ListWorkers(ctx context.Context, orgID string) ([]Row, error) {
 
 func (d *DB) ListTasks(ctx context.Context, orgID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,title,status::text AS status,
-		COALESCE(assigned_worker_id,'') AS assigned_worker_id FROM task ORDER BY created_at DESC LIMIT 50`)
+		COALESCE(assigned_worker_id,'') AS assigned_worker_id,
+		COALESCE(repo_id,'') AS repo_id FROM task ORDER BY created_at DESC LIMIT 50`)
 }
