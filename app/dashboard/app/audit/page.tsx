@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useState } from "react";
 import { btn, card, CardHead, cell, codeAmber, codeDim, getToken, Page, PageHead, short, tableStyle, thCell, usePoll, useT } from "../ui";
 
 type Audit = { when: string; actor_type: string; actor_id: string; action: string; target_type: string; target_id: string };
@@ -6,6 +7,8 @@ type Audit = { when: string; actor_type: string; actor_id: string; action: strin
 export default function Auditoria() {
   const t = useT();
   const { data: rows } = usePoll<Audit[]>("/v1/audit", 4000);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { if (rows !== undefined) setLoading(false); }, [rows]);
   const list = rows || [];
 
   function exportCSV() {
@@ -21,7 +24,7 @@ export default function Auditoria() {
   }
 
   return (
-    <Page>
+    <Page loading={loading}>
       <PageHead eyebrow="Conhecimento & sistema" title="Auditoria" subtitle="Quem fez o quê — server-side."
         right={<button style={btn} onClick={exportCSV}>{t("exportar CSV")}</button>} />
       <div style={card}>

@@ -1,6 +1,7 @@
 "use client";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 // ───────────────────────── tema (dark/light) ─────────────────────────
 export function useTheme(): [string, () => void] {
@@ -170,6 +171,14 @@ export function PageHead({ eyebrow, title, subtitle, right }: { eyebrow?: string
   );
 }
 
+// portal helper — renderiza filhos no body (escapa qualquer stacking context)
+export function Portal({ children }: { children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+  return createPortal(children, document.body);
+}
+
 // modal reutilizável (overlay + fadein/rise + Esc/backdrop p/ fechar)
 export function Modal({ title, onClose, children, footer, width = 520 }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; width?: number }) {
   const [lang] = useLang();
@@ -180,16 +189,18 @@ export function Modal({ title, onClose, children, footer, width = 520 }: { title
     return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
   }, [onClose]);
   return (
-    <div className="apf-fadein" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div className="apf-rise" onClick={(e) => e.stopPropagation()} style={{ width, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "var(--shadow-pop)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, background: "var(--card)" }}>
-          <b style={{ fontFamily: "var(--head)", fontSize: 15 }}>{tr(lang, title)}</b>
-          <button className="apf-iconbtn" onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: "none", background: "transparent", color: "var(--dim)", cursor: "pointer", fontSize: 16 }}>✕</button>
+    <Portal>
+      <div className="apf-fadein" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div className="apf-rise" onClick={(e) => e.stopPropagation()} style={{ width, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "var(--shadow-pop)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, background: "var(--card)" }}>
+            <b style={{ fontFamily: "var(--head)", fontSize: 15 }}>{tr(lang, title)}</b>
+            <button className="apf-iconbtn" onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: "none", background: "transparent", color: "var(--dim)", cursor: "pointer", fontSize: 16 }}>✕</button>
+          </div>
+          <div style={{ padding: 18 }}>{children}</div>
+          {footer && <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 18px", borderTop: "1px solid var(--border)", position: "sticky", bottom: 0, background: "var(--card)" }}>{footer}</div>}
         </div>
-        <div style={{ padding: 18 }}>{children}</div>
-        {footer && <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 18px", borderTop: "1px solid var(--border)", position: "sticky", bottom: 0, background: "var(--card)" }}>{footer}</div>}
       </div>
-    </div>
+    </Portal>
   );
 }
 
@@ -430,40 +441,86 @@ function CommandPalette() {
 
 // ───────────────────────── workspace switcher ─────────────────────────
 function WorkspaceMenu({ lang }: { lang: string }) {
-  const [open, setOpen] = useState(false);
-  const [wsps, setWsps] = useState<{ id: string; name: string; initial: string }[]>([]);
-  const [role, setRole] = useState("");
+  const [open, setOpen]           = useState(false);
+  const [wsps, setWsps]           = useState<{ id: string; name: string; initial: string }[]>([]);
+  const [role, setRole]           = useState("");
+  const [wspModal, setWspModal]   = useState(false);
+  const [wspName, setWspName]     = useState("");
+  const [wspSaving, setWspSaving] = useState(false);
+  const menuRef                   = useRef<HTMLDivElement>(null);
   const cur = wsps[0];
+
   const load = useCallback(() => {
     apiGet<{ data: any[] }>("/v1/workspaces").then((r) => setWsps(r?.data || [])).catch(() => {});
     apiGet<{ role: string }>("/v1/me").then((r) => setRole(r?.role || "")).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
-  async function novo() {
-    const name = prompt("Nome do novo workspace:");
-    if (name) { await apiPost("/v1/workspaces", { name }); load(); }
+
+  // close on outside click — avoids z-index conflict with sticky aside stacking context
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
+
+  function openModal() { setOpen(false); setWspName(""); setWspModal(true); }
+
+  async function createWsp() {
+    if (!wspName.trim()) return;
+    setWspSaving(true);
+    try { await apiPost("/v1/workspaces", { name: wspName.trim() }); load(); setWspModal(false); }
+    finally { setWspSaving(false); }
   }
+
   return (
-    <div style={{ position: "relative", margin: "0 12px 8px" }}>
-      <button className="apf-link" onClick={() => setOpen((o) => !o)}
-        style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--card)", cursor: "pointer", color: "var(--ink)", textAlign: "left" }}>
-        <span style={{ width: 22, height: 22, borderRadius: 6, background: "var(--accent)", color: "var(--accent-ink)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>{cur?.initial || "P"}</span>
-        <span style={{ fontSize: 13, lineHeight: 1.2 }}><b>{cur?.name || "Principal"}</b><br /><span style={{ color: "var(--mute)", fontSize: 11 }}>{t(lang, "wsp")}{role ? " · " + role : ""}</span></span>
-        <span style={{ marginLeft: "auto", color: "var(--mute)" }}>▾</span>
-      </button>
-      {open && (
-        <div className="apf-fadein" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, zIndex: 20, boxShadow: "var(--shadow-pop)" }}>
-          {wsps.map((w) => (
-            <a key={w.id} className="apf-link" href="/" onClick={() => { try { localStorage.setItem("apifor_wsp", w.id); } catch {} }}
-              style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, fontSize: 13 }}>
-              <span style={{ width: 18, height: 18, borderRadius: 5, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 10 }}>{w.initial}</span>
-              {w.name}
-            </a>
-          ))}
-          <div onClick={novo} className="apf-link" style={{ padding: "7px 9px", borderRadius: 8, fontSize: 13, color: "var(--accent)", cursor: "pointer", borderTop: "1px solid var(--border)", marginTop: 4 }}>+ {t(lang, "newWsp")}</div>
-        </div>
+    <>
+      <div ref={menuRef} style={{ position: "relative", margin: "0 12px 8px" }}>
+        <button className="apf-link" onClick={() => setOpen((o) => !o)}
+          style={{ width: "100%", padding: "8px 10px", borderRadius: 10, border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, background: "var(--card)", cursor: "pointer", color: "var(--ink)", textAlign: "left" }}>
+          <span style={{ width: 22, height: 22, borderRadius: 6, background: "var(--accent)", color: "var(--accent-ink)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>{cur?.initial || "P"}</span>
+          <span style={{ fontSize: 13, lineHeight: 1.2 }}><b>{cur?.name || "Principal"}</b><br /><span style={{ color: "var(--mute)", fontSize: 11 }}>{t(lang, "wsp")}{role ? " · " + role : ""}</span></span>
+          <span style={{ marginLeft: "auto", color: "var(--mute)" }}>▾</span>
+        </button>
+        {open && (
+          <div className="apf-fadein" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, zIndex: 20, boxShadow: "var(--shadow-pop)" }}>
+            {wsps.map((w) => (
+              <a key={w.id} className="apf-link" href="/" onClick={() => { try { localStorage.setItem("apifor_wsp", w.id); } catch {} }}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, fontSize: 13 }}>
+                <span style={{ width: 18, height: 18, borderRadius: 5, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 10 }}>{w.initial}</span>
+                {w.name}
+              </a>
+            ))}
+            <div onClick={openModal} className="apf-link" style={{ padding: "7px 9px", borderRadius: 8, fontSize: 13, color: "var(--accent)", cursor: "pointer", borderTop: "1px solid var(--border)", marginTop: 4 }}>+ {t(lang, "newWsp")}</div>
+          </div>
+        )}
+      </div>
+
+      {wspModal && (
+        <Modal title="Novo workspace" onClose={() => setWspModal(false)} width={400}
+          footer={<>
+            <button onClick={() => setWspModal(false)} style={{ height: 34, padding: "0 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
+            <button onClick={createWsp} disabled={wspSaving || !wspName.trim()}
+              style={{ height: 34, padding: "0 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "var(--accent-ink)", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: (wspSaving || !wspName.trim()) ? .5 : 1 }}>
+              {wspSaving ? "Criando…" : "Criar"}
+            </button>
+          </>}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={{ fontSize: 11.5, color: "var(--dim)" }}>Nome do workspace</span>
+            <input
+              autoFocus
+              value={wspName}
+              onChange={(e) => setWspName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") createWsp(); }}
+              placeholder="ex: Produção"
+              style={{ height: 38, padding: "0 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 13, outline: "none", fontFamily: "inherit" }}
+            />
+          </label>
+        </Modal>
       )}
-    </div>
+    </>
   );
 }
 
@@ -505,6 +562,153 @@ function Sidebar() {
   );
 }
 
+// ───────────────────────── notificações dropdown ─────────────────────────
+type Notif = { id: string; type: string; title: string; body: string; read: boolean; created_at: string };
+
+const NOTIF_MOCK: Notif[] = [
+  { id: "n1", type: "pr_merged",    title: "PR mergeado",        body: "feat/workers-pinned → main · #44",              read: false, created_at: new Date(Date.now() - 18 * 60000).toISOString() },
+  { id: "n2", type: "task_done",    title: "Tarefa concluída",   body: "fix: auth middleware token expiry check",        read: false, created_at: new Date(Date.now() - 55 * 60000).toISOString() },
+  { id: "n3", type: "worker_error", title: "Worker interrompido",body: "Conflito em migração 0042_alter_invoice",        read: false, created_at: new Date(Date.now() - 2 * 3600000).toISOString() },
+  { id: "n4", type: "info",         title: "Plano atualizado",   body: "Conta migrada para o plano Pro com sucesso.",    read: true,  created_at: new Date(Date.now() - 24 * 3600000).toISOString() },
+  { id: "n5", type: "task_done",    title: "Tarefa concluída",   body: "feat: config do pool funcional (liga/desliga)",  read: true,  created_at: new Date(Date.now() - 2 * 86400000).toISOString() },
+];
+
+function timeAgo(iso: string): string {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60)   return "agora";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+const NOTIF_ICON: Record<string, React.ReactNode> = {
+  pr_merged:    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="2.5"/></svg>,
+  task_done:    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>,
+  worker_error: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>,
+  info:         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>,
+};
+const NOTIF_COLOR: Record<string, [string, string]> = {
+  pr_merged:    ["var(--blue)",   "rgba(88,166,255,.12)"],
+  task_done:    ["var(--green)",  "var(--green-tint)"],
+  worker_error: ["var(--red)",    "var(--red-tint)"],
+  info:         ["var(--accent)", "var(--accent-tint)"],
+};
+
+function NotifMenu({ unread: initUnread }: { unread: number }) {
+  const [open, setOpen]   = useState(false);
+  const [notifs, setNotifs] = useState<Notif[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [rect, setRect]   = useState<DOMRect | null>(null);
+  const [winW, setWinW]   = useState(0);
+  const btnRef            = useRef<HTMLButtonElement>(null);
+  const unreadCount       = notifs.filter((n) => !n.read).length || (open ? 0 : initUnread);
+
+  function openMenu() {
+    if (btnRef.current) {
+      setRect(btnRef.current.getBoundingClientRect());
+      setWinW(window.innerWidth);
+    }
+    setOpen(true);
+    if (notifs.length) return;
+    setLoading(true);
+    apiGet<{ data: Notif[] }>("/v1/notifications")
+      .then((r) => setNotifs(r?.data?.length ? r.data : NOTIF_MOCK))
+      .catch(() => setNotifs(NOTIF_MOCK))
+      .finally(() => setLoading(false));
+  }
+
+  function markAll() {
+    setNotifs((ns) => ns.map((n) => ({ ...n, read: true })));
+    apiGet("/v1/notifications/mark-read").catch(() => {});
+  }
+
+  function markOne(id: string) {
+    setNotifs((ns) => ns.map((n) => n.id === id ? { ...n, read: true } : n));
+  }
+
+  const ic = { width: 34, height: 34, borderRadius: 9, border: "1px solid var(--border)", background: "var(--card)", color: "var(--dim)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 15 } as const;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button ref={btnRef} className="apf-iconbtn" style={{ ...ic, position: "relative" }} title="Notificações"
+        onClick={() => open ? setOpen(false) : openMenu()}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        {unreadCount > 0 && (
+          <span style={{ position: "absolute", top: -4, right: -4, background: "var(--red)", color: "#fff", borderRadius: 10, minWidth: 16, height: 16, fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px", fontWeight: 700, pointerEvents: "none" }}>
+            {unreadCount > 9 ? "9+" : unreadCount}
+          </span>
+        )}
+      </button>
+
+      {open && rect && (
+        <Portal>
+          {/* backdrop */}
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 98 }} />
+          {/* panel */}
+          <div className="apf-fadein" style={{ position: "fixed", top: rect.bottom + 8, right: winW - rect.right, width: 360, maxHeight: "70vh", display: "flex", flexDirection: "column", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow-pop)", zIndex: 99, overflow: "hidden" }}>
+            {/* header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>Notificações</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {notifs.some((n) => !n.read) && (
+                  <button onClick={markAll} style={{ fontSize: 11.5, fontWeight: 600, color: "var(--accent)", background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
+                    Marcar tudo como lido
+                  </button>
+                )}
+                <button onClick={() => setOpen(false)} style={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, border: "none", background: "transparent", color: "var(--mute)", cursor: "pointer", fontSize: 14 }}>✕</button>
+              </div>
+            </div>
+
+            {/* list */}
+            <div style={{ overflowY: "auto", flex: 1 }}>
+              {loading && (
+                <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--mute)", fontSize: 12.5 }}>Carregando…</div>
+              )}
+              {!loading && notifs.length === 0 && (
+                <div style={{ padding: "32px 16px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--border)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)" }}>Nenhuma notificação</span>
+                </div>
+              )}
+              {!loading && notifs.map((n) => {
+                const [color, bg] = NOTIF_COLOR[n.type] || NOTIF_COLOR.info;
+                return (
+                  <div key={n.id} onClick={() => markOne(n.id)}
+                    style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "12px 16px", borderBottom: "1px solid var(--border)", cursor: "pointer", background: n.read ? "transparent" : "color-mix(in srgb, var(--accent-tint) 40%, transparent)", transition: "background .12s" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = n.read ? "transparent" : "color-mix(in srgb, var(--accent-tint) 40%, transparent)")}>
+                    {/* icon */}
+                    <span style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 9, background: bg, color, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {NOTIF_ICON[n.type] || NOTIF_ICON.info}
+                    </span>
+                    {/* text */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: n.read ? 500 : 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.title}</span>
+                        <span style={{ fontSize: 10.5, color: "var(--mute)", flexShrink: 0, fontFamily: "var(--mono)" }}>{timeAgo(n.created_at)}</span>
+                      </div>
+                      <span style={{ fontSize: 11.5, color: "var(--dim)", lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{n.body}</span>
+                    </div>
+                    {/* unread dot */}
+                    {!n.read && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, marginTop: 4 }} />}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* footer */}
+            <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
+              <a href="/notifications" onClick={() => setOpen(false)} style={{ display: "block", textAlign: "center", fontSize: 12.5, fontWeight: 600, color: "var(--accent)", textDecoration: "none" }}>
+                Ver todas as notificações →
+              </a>
+            </div>
+          </div>
+        </Portal>
+      )}
+    </div>
+  );
+}
+
 function LangMenu({ lang, setLang }: { lang: string; setLang: (l: string) => void }) {
   const [open, setOpen] = useState(false);
   const ic = { width: 34, height: 34, borderRadius: 9, border: "1px solid var(--border)", background: "var(--card)", color: "var(--dim)", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 12, fontWeight: 700 } as const;
@@ -517,6 +721,71 @@ function LangMenu({ lang, setLang }: { lang: string; setLang: (l: string) => voi
             <div key={code} className="apf-link" onClick={() => { setLang(code); setOpen(false); }}
               style={{ padding: "7px 12px", borderRadius: 7, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap", color: lang === code ? "var(--accent)" : "var(--ink)" }}>{name}</div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ───────────────────────── perfil dropdown ─────────────────────────
+function ProfileMenu({ lang }: { lang: string }) {
+  const [open, setOpen] = useState(false);
+  const [me, setMe]     = useState<{ user_id?: string; name?: string } | null>(null);
+  const menuRef         = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    apiGet<{ user_id?: string; name?: string }>("/v1/me").then((r) => setMe(r)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
+
+  const initials = (me?.name || me?.user_id || "AP").slice(0, 2).toUpperCase();
+
+  const ITEMS = [
+    { label: lang === "en" ? "Account" : "Conta",   href: "/conta",  icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg> },
+    { label: lang === "en" ? "Help"    : "Ajuda",   href: "/ajuda",  icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg> },
+  ];
+
+  return (
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button onClick={() => setOpen((o) => !o)} title={lang === "en" ? "Profile" : "Perfil"}
+        style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accent)", color: "var(--accent-ink)", border: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, fontFamily: "var(--head)", cursor: "pointer", flexShrink: 0 }}>
+        {initials}
+      </button>
+
+      {open && (
+        <div className="apf-fadein" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 200, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, boxShadow: "var(--shadow-pop)", zIndex: 20, padding: 5, overflow: "hidden" }}>
+          {/* user info */}
+          <div style={{ padding: "10px 12px 8px", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{me?.name || "—"}</div>
+            <div style={{ fontSize: 11, color: "var(--mute)", fontFamily: "var(--mono)", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{me?.user_id || "—"}</div>
+          </div>
+
+          {ITEMS.map((item) => (
+            <a key={item.href} href={item.href} onClick={() => setOpen(false)} className="apf-link"
+              style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 12px", borderRadius: 8, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
+              <span style={{ color: "var(--mute)" }}>{item.icon}</span>
+              {item.label}
+            </a>
+          ))}
+
+          {/* separator + logout */}
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}>
+            <button onClick={() => { setOpen(false); setToken(null); location.href = "/login"; }}
+              style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 12px", borderRadius: 8, border: "none", background: "transparent", fontSize: 13, color: "var(--red)", cursor: "pointer", textAlign: "left" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--red-tint)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+              {lang === "en" ? "Sign out" : "Sair"}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -543,11 +812,8 @@ function Topbar() {
       </span>
       <LangMenu lang={lang} setLang={setLang} />
       <button className="apf-iconbtn" style={ic} onClick={toggle} title="Alternar tema">{theme === "dark" ? "☀️" : "🌙"}</button>
-      <a className="apf-iconbtn" href="/notifications" style={{ ...ic, position: "relative" }} title="Notificações">
-        🔔
-        {unread > 0 && <span style={{ position: "absolute", top: -4, right: -4, background: "var(--red)", color: "#fff", borderRadius: 10, minWidth: 16, height: 16, fontSize: 10, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 4px", fontWeight: 700 }}>{unread}</span>}
-      </a>
-      <span style={{ width: 34, height: 34, borderRadius: 9, background: "var(--accent)", color: "var(--accent-ink)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, fontFamily: "var(--head)" }}>AP</span>
+      <NotifMenu unread={unread} />
+      <ProfileMenu lang={lang} />
     </header>
   );
 }
@@ -595,13 +861,50 @@ export function usePoll<T = any>(path: string, ms = 2000) {
 }
 
 // ───────────────────────── app shell ─────────────────────────
-export function Page({ children }: { children: React.ReactNode }) {
+function PageSkeleton() {
+  const sh = (w: string | number, h: number, mb = 0) => (
+    <div className="apf-shimmer" style={{ width: w, height: h, marginBottom: mb }} />
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* page head */}
+      <div style={{ marginBottom: 8 }}>
+        {sh(72, 10, 10)}
+        {sh(220, 28, 10)}
+        {sh(320, 13, 0)}
+      </div>
+      {/* stat row */}
+      <div style={{ display: "flex", gap: 14 }}>
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} style={{ flex: 1, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 13, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+            {sh("60%", 11)}
+            {sh("40%", 22)}
+          </div>
+        ))}
+      </div>
+      {/* main cards */}
+      {[180, 130, 100].map((h, i) => (
+        <div key={i} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 13, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+          {sh("35%", 13)}
+          {sh("70%", 10)}
+          {sh("55%", 10)}
+          {h > 130 && sh("45%", 10)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function Page({ children, loading }: { children: React.ReactNode; loading?: boolean }) {
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       <Sidebar />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <Topbar />
-        <main className="apf-rise" style={{ padding: "26px 32px", maxWidth: 1180, width: "100%" }}>{children}</main>
+        {loading && <div className="apf-progress-bar" key={String(loading)} />}
+        <main className="apf-rise" style={{ padding: "26px 32px", maxWidth: 1180, width: "100%" }}>
+          {loading ? <PageSkeleton /> : children}
+        </main>
       </div>
       <CommandPalette />
     </div>

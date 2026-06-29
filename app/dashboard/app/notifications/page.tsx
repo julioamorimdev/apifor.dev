@@ -8,8 +8,10 @@ const tone = (t: string) => (t === "merge" ? "merged" : t === "fail" || t === "l
 export default function Notificacoes() {
   const t = useT();
   const [items, setItems] = useState<Notif[]>([]);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     const es = new EventSource(sseURL("/v1/notifications/stream"));
+    es.onopen = () => setLoading(false);
     es.onmessage = (e) => { try { setItems(JSON.parse(e.data).notifications || []); } catch {} };
     return () => es.close();
   }, []);
@@ -18,7 +20,7 @@ export default function Notificacoes() {
   const unread = items.filter((n) => !n.read).length;
 
   return (
-    <Page>
+    <Page loading={loading}>
       <PageHead eyebrow="Operação" title="Notificações" subtitle="Eventos do cérebro em tempo real (SSE)."
         right={<button style={btn} onClick={markRead}>{t("marcar todas como lidas")}</button>} />
       <div style={card}>

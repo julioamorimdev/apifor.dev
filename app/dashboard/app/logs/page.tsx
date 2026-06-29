@@ -1,49 +1,132 @@
 "use client";
-import { useState } from "react";
-import { card, input, Page, PageHead, Pills, short, usePoll, useT } from "../ui";
+import { useEffect, useState } from "react";
+import { Page, PageHead, short, usePoll } from "../ui";
 
 type Log = { when: string; task_id: string; type: string; status: string; log: string };
 
-const FILTERS: [string, string][] = [["all", "Todos"], ["done", "OK"], ["failed", "Erro"]];
-const lvl = (s: string): [string, string] =>
-  s === "failed" || s === "changes" ? ["ERRO", "var(--red)"]
-    : s === "done" || s === "passed" || s === "approved" || s === "merged" ? ["OK", "var(--green)"]
-      : s === "running" ? ["INFO", "var(--blue)"] : ["INFO", "var(--orange)"];
+const LEVELS: [string, string][] = [
+  ["todos", "Todos"], ["info", "Info"], ["warn", "Aviso"], ["err", "Erro"],
+];
+
+function lvl(s: string): [string, string] {
+  if (s === "failed" || s === "changes")                                  return ["ERRO",  "var(--red)"];
+  if (s === "done" || s === "passed" || s === "approved" || s === "merged") return ["OK",    "var(--green)"];
+  if (s === "running" || s === "active")                                  return ["INFO",  "var(--blue)"];
+  if (s === "pending" || s === "planning")                                return ["AVISO", "var(--orange)"];
+  return ["INFO", "var(--dim)"];
+}
+
+function matchLevel(f: string, s: string) {
+  if (f === "todos") return true;
+  if (f === "err")   return s === "failed" || s === "changes";
+  if (f === "warn")  return s === "pending" || s === "planning";
+  if (f === "info")  return !["failed","changes","pending","planning"].includes(s);
+  return true;
+}
+
+function fmtTime(iso: string) {
+  if (!iso) return "—";
+  const t = iso.slice(11, 19);
+  return t || iso;
+}
+
+const selStyle: React.CSSProperties = {
+  height: 32, padding: "0 10px", borderRadius: 8, border: "1px solid var(--border)",
+  background: "var(--bg)", color: "var(--ink)", font: "inherit", fontSize: 12, cursor: "pointer",
+};
+
+const pillStyle = (active: boolean): React.CSSProperties => ({
+  padding: "3px 10px", borderRadius: 6, border: "none", fontSize: 12,
+  fontWeight: active ? 600 : 500, cursor: "pointer",
+  background: active ? "var(--card)" : "transparent",
+  color: active ? "var(--ink)" : "var(--dim)",
+  boxShadow: active ? "0 1px 3px rgba(0,0,0,.12)" : "none",
+});
 
 export default function Logs() {
-  const t = useT();
   const { data: logs } = usePoll<Log[]>("/v1/logs", 2500);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { if (logs !== undefined) setLoading(false); }, [logs]);
   const all = logs || [];
-  const [f, setF] = useState("all");
-  const [q, setQ] = useState("");
+
+  const [level,  setLevel]  = useState("todos");
+  const [who,    setWho]    = useState("todos");
+  const [agent,  setAgent]  = useState("todos");
+
+  const workers = [...new Set(all.map((l) => l.task_id).filter(Boolean))];
+  const agents  = [...new Set(all.map((l) => l.type).filter(Boolean))];
+
   const rows = all
-    .filter((l) => f === "all" || (f === "failed" && (l.status === "failed" || l.status === "changes")) || (f === "done" && !["failed", "changes"].includes(l.status)))
-    .filter((l) => (l.task_id + l.type + l.log).toLowerCase().includes(q.toLowerCase()));
+    .filter((l) => matchLevel(level, l.status))
+    .filter((l) => who   === "todos" || l.task_id === who)
+    .filter((l) => agent === "todos" || l.type    === agent);
+
+  const controls = (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <select value={who} onChange={(e) => setWho(e.target.value)} style={selStyle}>
+        <option value="todos">Todos os workers</option>
+        {workers.map((w) => (
+          <option key={w} value={w}>#{short(w.replace(/^tsk_/, ""), 8)}</option>
+        ))}
+      </select>
+
+      <select value={agent} onChange={(e) => setAgent(e.target.value)} style={selStyle}>
+        <option value="todos">Todos os agentes</option>
+        {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+      </select>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 2, padding: 3, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 7 }}>
+        {LEVELS.map(([k, label]) => (
+          <button key={k} onClick={() => setLevel(k)} style={pillStyle(level === k)}>{label}</button>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
-    <Page>
-      <PageHead eyebrow="Operação" title="Logs" subtitle="Feed do pipeline (steps dos workers) em tempo real." />
-      <div style={card}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Buscar log…")} style={{ ...input, flex: 1, minWidth: 160 }} />
-          <Pills options={FILTERS} value={f} onChange={setF} />
-        </div>
-        <div style={{ fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: 1.75, padding: "12px 6px", maxHeight: "68vh", overflowY: "auto", background: "var(--bg)" }}>
+    <Page loading={loading}>
+      <PageHead eyebrow="Operação" title="Logs"
+        subtitle="Terminal ao vivo, filtrável por nível."
+        right={controls} />
+
+      {/* terminal */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", overflow: "hidden" }}>
+        <div style={{ fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.9, padding: "14px 16px", minHeight: 420, maxHeight: "68vh", overflowY: "auto" }}>
           {rows.map((l, i) => {
             const [lv, lc] = lvl(l.status);
             return (
-              <div key={i} style={{ display: "flex", gap: 12, padding: "2px 14px", alignItems: "baseline" }}>
-                <span style={{ color: "var(--mute)", flexShrink: 0 }}>{(l.when || "").slice(11) || l.when}</span>
-                <span style={{ color: lc, flexShrink: 0, width: 40, fontWeight: 600 }}>{lv}</span>
-                <span style={{ color: "var(--dim)", flexShrink: 0, width: 64 }}>{l.type}#{short(l.task_id.replace(/^tsk_/, ""), 4)}</span>
-                <span style={{ color: "var(--ink)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{l.log || l.status}</span>
+              <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+                <span style={{ color: "var(--mute)", flexShrink: 0 }}>{fmtTime(l.when)}</span>
+                <span style={{ color: lc, fontWeight: 600, flexShrink: 0, flex: "0 0 40px" }}>{lv}</span>
+                <span style={{ color: "var(--dim)", flexShrink: 0, minWidth: 44 }}>
+                  {l.type}#{short(l.task_id.replace(/^tsk_/, ""), 4)}
+                </span>
+                <span style={{ color: "var(--ink)", opacity: .92, wordBreak: "break-word" }}>
+                  {l.log || l.status}
+                </span>
               </div>
             );
           })}
-          {!rows.length && <div style={{ color: "var(--mute)", padding: "4px 14px" }}>{t("nenhum log ainda", "no logs yet")} — {t("crie uma tarefa com repositório pra ver o pipeline.", "create a task with a repo to see the pipeline.")}</div>}
-          <div style={{ padding: "6px 14px", color: "var(--green)" }}>apifor@pool ~$ <span className="apf-cursor" style={{ background: "var(--green)", color: "var(--green)" }}>█</span></div>
+
+          {!rows.length && (
+            <span style={{ color: "var(--mute)" }}>
+              nenhum log ainda — crie uma tarefa com repositório pra ver o pipeline.
+            </span>
+          )}
+
+          {/* blinking cursor */}
+          <div style={{ display: "flex", gap: 9, alignItems: "center", paddingTop: 4 }}>
+            <span style={{ color: "var(--green)" }}>apifor@pool ~$</span>
+            <span style={{ width: 8, height: 14, background: "var(--green)", display: "inline-block", animation: "blink 1.1s step-end infinite" }} />
+          </div>
         </div>
-        <div style={{ padding: "10px 16px", color: "var(--mute)", fontSize: 12, borderTop: "1px solid var(--border)" }}>{rows.length} {t("linha(s)", "line(s)")}</div>
+
+        <div style={{ padding: "9px 16px", borderTop: "1px solid var(--border)", fontSize: 11.5, color: "var(--mute)", fontFamily: "var(--mono)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span>{rows.length} linha(s)</span>
+          <span style={{ fontSize: 11, color: "var(--border)" }}>
+            {all.length !== rows.length ? `${all.length} total · ${all.length - rows.length} filtrados` : ""}
+          </span>
+        </div>
       </div>
     </Page>
   );

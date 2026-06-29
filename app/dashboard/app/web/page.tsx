@@ -1,10 +1,13 @@
 "use client";
+import { useEffect, useState } from "react";
 import { card, CardHead, cell, codeAmber, Page, PageHead, tableStyle, thCell, useT } from "../ui";
-
-const base = typeof window !== "undefined" ? (process.env.NEXT_PUBLIC_API_BASE || window.location.origin + "/api") : "/api";
 
 export default function Web() {
   const t = useT();
+  const [base, setBase] = useState("/api");
+  useEffect(() => {
+    setBase(process.env.NEXT_PUBLIC_API_BASE || window.location.origin + "/api");
+  }, []);
   const endpoints: [string, string, string][] = [
     ["POST", "/v1/auth/login", t("obter token JWT", "get JWT token")],
     ["GET", "/v1/tasks", t("listar tarefas", "list tasks")],

@@ -1,61 +1,200 @@
 "use client";
-import { useEffect, useState } from "react";
-import { badge, card, Page, PageHead, short, sseURL, useT } from "../ui";
+import { useCallback, useEffect, useState } from "react";
+import { apiGet, badge, Page, PageHead, short, sseURL } from "../ui";
 
-type Worker = { id: string; source: string; status: string; current_step: string; current_task_id?: string };
+type Worker = {
+  id: string; source: string; host: string; status: string;
+  current_step: string; current_task_id: string;
+};
 type Task = { id: string; title: string; status: string };
+type PoolCfg = { paused: boolean };
 
-const RUN = new Set(["running", "busy", "active", "exec"]);
+const RUNNING = new Set(["running", "busy", "active", "exec"]);
+
+function workerColor(s: string) {
+  if (RUNNING.has(s))                    return "var(--accent)";
+  if (s === "merged" || s === "done")    return "var(--green)";
+  if (s === "failed" || s === "blocked") return "var(--red)";
+  if (s === "paused")                    return "var(--orange)";
+  return "var(--mute)";
+}
+
+// 3-bar dotpulse visualizer
+function Bars({ color, animate }: { color: string; animate: boolean }) {
+  const bar = (h: string, delay: string): React.CSSProperties => ({
+    width: 3, borderRadius: 2, background: color, height: h, transformOrigin: "bottom",
+    ...(animate ? { animation: `dotpulse 1s ease-in-out ${delay} infinite` } : {}),
+  });
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 15, width: 15, flexShrink: 0, color }}>
+      <span style={bar("45%", "0s")} />
+      <span style={bar("90%", ".18s")} />
+      <span style={bar("65%", ".36s")} />
+    </div>
+  );
+}
+
+const ghostBtn: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  height: 28, padding: "0 11px", borderRadius: 7,
+  border: "1px solid var(--border)", background: "transparent",
+  color: "var(--dim)", fontSize: 11.5, fontWeight: 600, cursor: "pointer",
+};
 
 export default function Live() {
-  const t = useT();
   const [d, setD] = useState<{ workers: Worker[]; tasks: Task[] }>({ workers: [], tasks: [] });
   const [live, setLive] = useState(false);
+  const [pool, setPool] = useState<PoolCfg | null>(null);
+
+  const loadPool = useCallback(() => {
+    apiGet<PoolCfg>("/v1/pool").then((x) => { if (!(x as any)?.error) setPool(x); }).catch(() => {});
+  }, []);
+
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { if (pool !== null) setLoading(false); }, [pool]);
+
+  useEffect(() => {
+    loadPool();
+    const t = setInterval(loadPool, 5000);
+    return () => clearInterval(t);
+  }, [loadPool]);
 
   useEffect(() => {
     const es = new EventSource(sseURL("/v1/workers/stream"));
-    es.onopen = () => setLive(true);
+    es.onopen  = () => setLive(true);
     es.onerror = () => setLive(false);
     es.onmessage = (e) => { try { setD(JSON.parse(e.data)); } catch {} };
     return () => es.close();
   }, []);
 
-  const title = (id?: string) => d.tasks.find((x) => x.id === id)?.title || "";
-  const tone = (s: string) => (s === "merged" || s === "done" ? "merged" : s === "failed" || s === "blocked" ? "failed" : RUN.has(s) ? "running" : "idle");
+  const taskTitle = (id: string) => d.tasks.find((x) => x.id === id)?.title ?? "";
+  const paused = pool?.paused ?? false;
+  const poolColor = live && !paused ? "var(--green)" : paused ? "var(--orange)" : "var(--mute)";
+  const poolWord  = paused ? "PAUSADO" : live ? "RODANDO" : "OFFLINE";
+  const nWorkers  = d.workers.length;
+  const nRunning  = d.workers.filter((w) => RUNNING.has(w.status)).length;
 
   return (
-    <Page>
-      <PageHead eyebrow="Operação" title="Live" subtitle={`${d.workers.length} ${t("ativas", "active")} · ${t("progresso em tempo real de cada worker.", "real-time progress of each worker.")}`}
-        right={<span style={{ ...badge(live ? "running" : "failed"), display: "flex", alignItems: "center", gap: 6 }}><span className={live ? "apf-live" : ""} style={{ width: 7, height: 7, borderRadius: 7, background: "currentColor" }} />{live ? "● live (SSE)" : "○ offline"}</span>} />
+    <Page loading={loading}>
+      <PageHead
+        eyebrow="Operação"
+        title="Live"
+        subtitle={`Progresso em tempo real de cada worker · ${nWorkers} ativo(s) · ${nWorkers - nRunning} slot(s) livre(s).`}
+        right={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, height: 32, padding: "0 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: poolColor }} />
+            <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: ".04em", color: poolColor }}>{poolWord}</span>
+          </span>
+        }
+      />
 
-      {d.workers.map((w, i) => {
-        const running = RUN.has(w.status);
-        const col = `var(--${tone(w.status)})`;
-        return (
-          <div key={w.id} style={{ ...card, padding: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ width: 26, height: 26, borderRadius: 7, background: "var(--elev)", color: col, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>▮</span>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--dim)", background: "var(--bg)", borderRadius: 5, padding: "2px 7px" }}>W-{String(i + 1).padStart(2, "0")}</span>
-              {w.current_task_id && <span style={{ fontFamily: "var(--mono)", color: "var(--accent)", fontWeight: 600, fontSize: 13 }}>#{short(w.current_task_id.replace(/^tsk_/, ""), 6)}</span>}
-              <b style={{ flex: 1, minWidth: 120 }}>{title(w.current_task_id) || t("ocioso", "idle")}</b>
-              <span style={badge(w.status)}>{w.status}</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "11px 0 4px" }}>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--mute)" }}>{w.source}</span>
-              <div style={{ flex: 1, height: 6, borderRadius: 6, background: "var(--border)", overflow: "hidden", position: "relative" }}>
-                {running && <div style={{ position: "absolute", inset: 0, width: "38%", background: `linear-gradient(90deg, transparent, ${col}, transparent)`, animation: "barflow 1.6s linear infinite" }} />}
-                {!running && <div style={{ width: w.status === "merged" || w.status === "done" ? "100%" : "0%", height: "100%", background: col }} />}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {d.workers.map((w, i) => {
+          const col     = workerColor(w.status);
+          const running = RUNNING.has(w.status);
+          const isPaused = w.status === "paused";
+          const taskId  = w.current_task_id;
+          const title   = taskTitle(taskId) || (running ? "processando…" : "ocioso");
+
+          return (
+            <div key={w.id} style={{ display: "flex", flexDirection: "column", gap: 9, padding: "13px 15px", border: "1px solid var(--border)", borderRadius: 11, background: "var(--card)", boxShadow: "var(--shadow)" }}>
+
+              {/* row 1: bars + id chip + [paused] + task + title + pill */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <Bars color={col} animate={running} />
+
+                <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, fontWeight: 600, color: "var(--ink)", background: "var(--elev)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 7px", flexShrink: 0 }}>
+                  W-{String(i + 1).padStart(2, "0")}
+                </span>
+
+                {isPaused && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, padding: "1px 7px 1px 6px", borderRadius: 999, background: "var(--red-tint)", border: "1px solid rgba(248,81,73,.3)", color: "var(--red)", fontSize: 10, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase" }}>
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                    pausado
+                  </span>
+                )}
+
+                {taskId && (
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--accent)", fontWeight: 500, flexShrink: 0 }}>
+                    #{short(taskId.replace(/^tsk_/, ""), 6)}
+                  </span>
+                )}
+
+                <span style={{ fontSize: 12.5, color: "var(--ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {title}
+                </span>
+
+                <span style={badge(w.status)}>{w.status}</span>
+              </div>
+
+              {/* row 2: source + model chip + progress bar + elapsed */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--mono)", fontSize: 11, color: "var(--dim)", flexShrink: 0 }}>
+                  {w.source}<span style={{ color: "var(--mute)" }}>:{w.host}</span>
+                </span>
+
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--dim)", background: "var(--elev)", border: "1px solid var(--border)", borderRadius: 6, padding: "2px 7px", flexShrink: 0 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: 1, background: "var(--accent)", transform: "rotate(45deg)" }} />
+                  {w.source}
+                </span>
+
+                {/* progress bar */}
+                <div style={{ flex: 1, minWidth: 90, height: 6, borderRadius: 4, background: "var(--elev)", overflow: "hidden", position: "relative" }}>
+                  {running && (
+                    <div style={{ position: "absolute", inset: 0, width: "100%", background: col, opacity: .25 }}>
+                      <span style={{ position: "absolute", inset: 0, width: "40%", background: "linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent)", animation: "barflow 1.8s linear infinite" }} />
+                    </div>
+                  )}
+                  {!running && w.status === "merged" && (
+                    <div style={{ width: "100%", height: "100%", background: col }} />
+                  )}
+                </div>
+
+                <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, fontWeight: 600, color: "var(--ink)", flexShrink: 0, width: 34, textAlign: "right" }}>
+                  {running ? "●" : w.status === "merged" ? "✓" : "—"}
+                </span>
+              </div>
+
+              {/* row 3: current step */}
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--mute)", display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "var(--dim)" }}>›</span>
+                {w.current_step || "aguardando…"}
+              </div>
+
+              {/* row 4: action buttons */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <button style={ghostBtn} title="Linha do tempo em tempo real">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>
+                  </svg>
+                  Linha do tempo
+                </button>
+                <button style={ghostBtn}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>
+                  </svg>
+                  Abrir terminal
+                </button>
               </div>
             </div>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--dim)" }}>› {w.current_step || t("aguardando…", "waiting…")}</div>
+          );
+        })}
+
+        {/* empty state */}
+        {!d.workers.length && (
+          <div style={{ padding: "32px 20px", textAlign: "center", color: "var(--mute)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 11, fontSize: 13 }}>
+            nenhum worker conectado — suba o executor e crie uma tarefa.
           </div>
-        );
-      })}
-      {!d.workers.length && (
-        <div style={{ ...card, padding: 28, textAlign: "center", color: "var(--mute)" }}>
-          {t("nenhum worker ligado", "no worker connected")} — {t("suba o executor e crie uma tarefa.", "start the executor and create a task.")}
-        </div>
-      )}
+        )}
+      </div>
+
+      {/* SSE status footer */}
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: live ? "var(--green)" : "var(--mute)" }}>
+          <span className={live ? "apf-live" : ""} style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor" }} />
+          {live ? "SSE conectado" : "SSE offline"}
+        </span>
+      </div>
     </Page>
   );
 }

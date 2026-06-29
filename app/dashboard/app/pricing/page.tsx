@@ -24,10 +24,12 @@ const PLANS: Plan[] = [
 export default function Pricing() {
   const t = useT();
   const [u, setU] = useState<Usage | null>(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     const load = () => apiGet<Usage>("/v1/usage").then((r) => { if (!(r as any)?.error) setU(r); }).catch(() => {});
     load(); const i = setInterval(load, 5000); return () => clearInterval(i);
   }, []);
+  useEffect(() => { if (u !== null) setLoading(false); }, [u]);
   const cur = u?.plan;
   const wPct = u?.max_workers ? (100 * u.active_workers) / u.max_workers : 0;
   const hPct = u?.week_cap_seconds ? (100 * u.week_seconds_used) / u.week_cap_seconds : 0;
@@ -40,7 +42,7 @@ export default function Pricing() {
     else alert("Checkout indisponível (configure o Stripe no cérebro).");
   }
   return (
-    <Page>
+    <Page loading={loading}>
       <PageHead eyebrow="Conta & cobrança" title="Planos" subtitle="Gerencie seu plano e limites do pipeline." />
 
       <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16, marginBottom: 16 }}>
