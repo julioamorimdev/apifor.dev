@@ -97,6 +97,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/pool", a.pool)                         // GET config do pool / POST atualiza (manage)
 	mux.HandleFunc("/v1/connections", a.connections)           // GET conexões / POST motor IA
 	mux.HandleFunc("/v1/connections/claude/", a.claudeAuth)    // POST start|code|cancel (OAuth assinatura)
+	mux.HandleFunc("/v1/connections/anthropic/test", a.anthropicTest) // POST valida API key
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -946,6 +947,53 @@ func (a *API) sidecar(ctx context.Context, method, path string, body []byte) (in
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, out
+}
+
+// anthropicTest valida uma API key da Anthropic via GET /v1/models (barato,
+// sem custo de tokens). A chave nunca é gravada nem logada aqui.
+func (a *API) anthropicTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var in struct {
+		APIKey string `json:"api_key"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	key := strings.TrimSpace(in.APIKey)
+	if key == "" {
+		writeJSON(w, 400, errBody("bad_request", "api_key vazia"))
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://api.anthropic.com/v1/models?limit=1", nil)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	req.Header.Set("x-api-key", key)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": "falha de rede: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 200 {
+		writeJSON(w, 200, map[string]any{"ok": true, "message": "chave válida"})
+		return
+	}
+	msg := "chave inválida"
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		msg = "chave inválida ou sem permissão"
+	} else if resp.StatusCode == 429 {
+		msg = "rate limit — tente de novo"
+	} else {
+		msg = "resposta inesperada da Anthropic (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+	}
+	writeJSON(w, 200, map[string]any{"ok": false, "status": resp.StatusCode, "message": msg})
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).

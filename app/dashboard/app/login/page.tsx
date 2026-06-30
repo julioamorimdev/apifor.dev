@@ -1,9 +1,13 @@
 "use client";
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { apiPost, btn, card, input, setToken, useT } from "../ui";
 
-export default function Login() {
+function LoginInner() {
   const t = useT();
+  const params = useSearchParams();
+  const next = params.get("next") || "/";
   const [mode, setMode] = useState<"login" | "register">("login");
   const [f, setF] = useState({ email: "", password: "", org: "" });
   const [err, setErr] = useState("");
@@ -12,9 +16,13 @@ export default function Login() {
   async function submit() {
     setErr("");
     const path = mode === "login" ? "/v1/auth/login" : "/v1/auth/register";
-    const r = await apiPost<{ access_token?: string; error?: { message: string } }>(path, { email: f.email, password: f.password, org: f.org });
-    if (r.access_token) { setToken(r.access_token); location.href = "/"; }
-    else setErr(r.error?.message || t("falha na autenticação", "authentication failed"));
+    const r = await apiPost<{ access_token?: string; role?: string; error?: { message: string } }>(path, { email: f.email, password: f.password, org: f.org });
+    if (r.access_token) {
+      setToken(r.access_token);
+      try { localStorage.setItem("apifor_email", f.email); } catch {}
+      // superadmin vai pro console; demais respeitam ?next (default "/")
+      location.href = r.role === "superadmin" && next === "/" ? "/superadmin" : next;
+    } else setErr(r.error?.message || t("falha na autenticação", "authentication failed"));
   }
 
   return (
@@ -40,5 +48,13 @@ export default function Login() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function Login() {
+  return (
+    <Suspense>
+      <LoginInner />
+    </Suspense>
   );
 }

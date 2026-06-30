@@ -98,6 +98,7 @@ export default function Org() {
   const [inviting, setInviting] = useState(false);
 
   const [menuMember, setMenuMember] = useState<string | null>(null);
+  const [menuPos,    setMenuPos]    = useState<{ top: number; right: number } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const load = useCallback(() => Promise.allSettled([
@@ -242,18 +243,23 @@ export default function Org() {
                   {actText}
                 </span>
                 {/* 3-dot menu */}
-                <div style={{ position: "relative" }}>
+                <div>
                   <button
-                    onClick={() => setMenuMember(menuMember === m.id ? null : m.id)}
+                    onClick={(e) => {
+                      if (menuMember === m.id) { setMenuMember(null); setMenuPos(null); return; }
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                      setMenuMember(m.id);
+                    }}
                     style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, border: "none", background: "transparent", color: "var(--mute)", cursor: "pointer" }}
                     onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--elev)"; (e.currentTarget as HTMLElement).style.color = "var(--ink)"; }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--mute)"; }}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
                   </button>
-                  {menuMember === m.id && (
-                    <>
-                      <Portal><div onClick={() => setMenuMember(null)} style={{ position: "fixed", inset: 0, zIndex: 40 }} /></Portal>
-                      <div style={{ position: "absolute", right: 0, top: "100%", marginTop: 4, width: 150, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 9, boxShadow: "var(--shadow-pop)", zIndex: 50, padding: 4 }}>
+                  {menuMember === m.id && menuPos && (
+                    <Portal>
+                      <div onClick={() => { setMenuMember(null); setMenuPos(null); }} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
+                      <div style={{ position: "fixed", top: menuPos.top, right: menuPos.right, width: 150, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 9, boxShadow: "var(--shadow-pop)", zIndex: 50, padding: 4 }}>
                         <button style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", padding: "7px 10px", borderRadius: 7, border: "none", background: "transparent", fontSize: 12.5, color: "var(--ink)", cursor: "pointer", textAlign: "left" }}
                           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--elev)")}
                           onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
@@ -270,7 +276,7 @@ export default function Org() {
                           </button>
                         )}
                       </div>
-                    </>
+                    </Portal>
                   )}
                 </div>
               </div>

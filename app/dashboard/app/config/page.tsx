@@ -9,7 +9,9 @@ type Pool    = { mode: string; parallel_workers: number; timeout_min: number; re
 type PinnedW = { id: string; focus: string; repo_id: string; repo_name: string; concurrency: number; model: string };
 
 const MODELS = ["claude_opus", "claude_sonnet", "claude_haiku"];
-const MODEL_LABELS: Record<string, string> = { claude_opus: "Claude Opus 4.1", claude_sonnet: "Claude Sonnet 4.5", claude_haiku: "Claude Haiku 4" };
+const MODEL_LABELS: Record<string, string> = { claude_opus: "Claude Opus 4.8", claude_sonnet: "Claude Sonnet 4.6", claude_haiku: "Claude Haiku 4.5" };
+// IDs reais da API Anthropic (p/ chamadas / referência).
+const MODEL_API_IDS: Record<string, string> = { claude_opus: "claude-opus-4-8", claude_sonnet: "claude-sonnet-4-6", claude_haiku: "claude-haiku-4-5-20251001" };
 const AGENTS = [
   { role: "Planejador",   desc: "Decompõe a tarefa em etapas",           model: "claude_opus" },
   { role: "Codificador",  desc: "Escreve e edita o código",               model: "claude_sonnet" },
@@ -126,10 +128,25 @@ export default function Config() {
   const [iaUrl, setIaUrl]       = useState("");
   const [iaCode, setIaCode]     = useState("");
   const [iaErr, setIaErr]       = useState("");
+  // teste da API key: null = não testada; {ok,msg}
+  const [iaTest, setIaTest]     = useState<{ ok: boolean; msg: string } | null>(null);
+  const [iaTesting, setIaTesting] = useState(false);
 
   function resetIA() {
     setIaModal(null); setIaApiKey(""); setIaStep("idle");
     setIaUrl(""); setIaCode(""); setIaErr(""); setIaBusy(false);
+    setIaTest(null); setIaTesting(false);
+  }
+
+  async function testApiKey() {
+    if (!iaApiKey.trim()) return;
+    setIaTesting(true); setIaTest(null);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/anthropic/test", { api_key: iaApiKey.trim() });
+      setIaTest({ ok: !!r?.ok, msg: r?.message || (r?.ok ? "chave válida" : "chave inválida") });
+    } catch (e) {
+      setIaTest({ ok: false, msg: e instanceof Error ? e.message : "falha no teste" });
+    } finally { setIaTesting(false); }
   }
 
   // assinatura: inicia o `claude setup-token`, abre a URL de autorização e
@@ -737,12 +754,25 @@ export default function Config() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>API Key</span>
-              <input style={input} type="password" value={iaApiKey} onChange={(e) => setIaApiKey(e.target.value)} placeholder="sk-ant-…" />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={{ ...input, flex: 1 }} type="password" value={iaApiKey} onChange={(e) => { setIaApiKey(e.target.value); setIaTest(null); }} placeholder="sk-ant-…" />
+                <button
+                  style={{ height: 38, padding: "0 14px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer", opacity: iaTesting || !iaApiKey.trim() ? .6 : 1, pointerEvents: iaTesting || !iaApiKey.trim() ? "none" : "auto" }}
+                  onClick={testApiKey}>{iaTesting ? "Testando…" : "Testar"}</button>
+              </div>
+              {iaTest && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: iaTest.ok ? "var(--green)" : "var(--red)", marginTop: 2 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    {iaTest.ok ? <path d="M5 12l4 4 10-10"/> : <><path d="M18 6L6 18"/><path d="M6 6l12 12"/></>}
+                  </svg>
+                  {iaTest.msg}
+                </span>
+              )}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Modelo padrão</span>
               <select style={sSel}>
-                {MODELS.map((m) => <option key={m} value={m}>{MODEL_LABELS[m]}</option>)}
+                {MODELS.map((m) => <option key={m} value={m} title={MODEL_API_IDS[m]}>{MODEL_LABELS[m]} ({MODEL_API_IDS[m]})</option>)}
               </select>
             </div>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "14px 16px", background: "var(--accent-tint)", border: "1px solid rgba(245,166,35,.25)", borderRadius: 10 }}>
