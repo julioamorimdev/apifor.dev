@@ -67,15 +67,32 @@ services:
       REQUIRE_AUTH: "${REQUIRE_AUTH:-}"
       # produção: SEED_DEMO=false não cria o usuário/org demo. default (vazio) = semeia.
       SEED_DEMO: "${SEED_DEMO:-}"
+      # Superadmin: lista de e-mails separados por vírgula (recebem role "superadmin" no login).
+      SUPERADMIN_EMAILS: "${SUPERADMIN_EMAILS:-demo@apifor.dev}"
+      # TTL do JWT em minutos (login/register). default 720 (12h).
+      TOKEN_TTL_MIN: "${TOKEN_TTL_MIN:-720}"
       # TLS no REST/SSE (opt-in). REST_TLS=true emite cert da CA interna; ou
       # REST_TLS_CERT/REST_TLS_KEY p/ cert próprio. default (vazio) = HTTP (dev).
       REST_TLS: "${REST_TLS:-}"
       REST_TLS_HOSTS: "${REST_TLS_HOSTS:-}"
+      # Sidecar que dirige o `claude setup-token` (OAuth assinatura Claude).
+      AUTH_SIDECAR_URL: "http://auth-sidecar:8090"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:
       migrate: { condition: service_completed_successfully }
     ports: ["8088:8080", "9090:9090"]
+
+  # OAuth da assinatura Claude: roda o `claude setup-token` num PTY e grava as
+  # credenciais por conta em /data/contas/<id> (volume `contas`, compartilhado
+  # com o executor p/ os workers usarem CLAUDE_CONFIG_DIR=/data/contas/<id>).
+  auth-sidecar:
+    build: ./auth-sidecar
+    environment:
+      CONTAS_DIR: "/data/contas"
+      PORT: "8090"
+    volumes:
+      - contas:/data/contas
 
   executor:
     build: ./executor
@@ -95,6 +112,7 @@ services:
       - vaultdata:/var/lib/apifor        # cofre local persistente
       - ./sample:/workspace:ro           # refs de contexto (lidas LOCALMENTE)
       - gitremotes:/remotes              # remote git local p/ a demo do M2.2
+      - contas:/data/contas:ro           # credenciais Claude por conta (CLAUDE_CONFIG_DIR)
     depends_on:
       cerebro: { condition: service_started }
 
@@ -103,3 +121,4 @@ volumes:
   vaultdata:
   gitremotes:
   cadata:
+  contas:

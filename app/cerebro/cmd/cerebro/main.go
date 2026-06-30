@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -112,8 +113,21 @@ func main() {
 	}()
 
 	// HTTP
+	var superAdminEmails []string
+	if raw := os.Getenv("SUPERADMIN_EMAILS"); raw != "" {
+		for _, e := range strings.Split(raw, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				superAdminEmails = append(superAdminEmails, e)
+			}
+		}
+	}
+
+	// TTL do JWT (minutos). default 720 (12h). 0/ausente = default.
+	tokenTTL := time.Duration(atoiEnv("TOKEN_TTL_MIN")) * time.Minute
+
 	api := &httpapi.API{
 		DB: database, Auth: a, Hub: hub, CACertPEM: ca.CertPEM,
+		TokenTTL: tokenTTL,
 		HoursCapOverrideSec: srv.Cfg.HoursCapOverrideSec,
 		LeaseTTLOverrideSec: srv.Cfg.LeaseTTLOverrideSec,
 		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
@@ -122,6 +136,8 @@ func main() {
 		DunningGraceSec:     atoiEnv("DUNNING_GRACE_SEC"),
 		PublicURL:           envOr("PUBLIC_URL", "http://localhost:3000"),
 		RequireAuth:         os.Getenv("REQUIRE_AUTH") == "true", // M6.2: fecha o fallback dev
+		SuperAdminEmails:    superAdminEmails,
+		AuthSidecarURL:      os.Getenv("AUTH_SIDECAR_URL"), // OAuth assinatura Claude (claude setup-token)
 	}
 	serveHTTP(httpAddr, api.Routes(), ca)
 }

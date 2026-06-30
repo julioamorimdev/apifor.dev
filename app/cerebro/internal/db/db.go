@@ -94,6 +94,12 @@ const (
 	DemoWspID   = "wsp_demo"
 	DemoEmail   = "demo@apifor.dev"
 	DemoPass    = "demo"
+
+	TestUserID = "usr_test"
+	TestOrgID  = "org_test"
+	TestWspID  = "wsp_test"
+	TestEmail  = "user@apifor.dev"
+	TestPass   = "user"
 )
 
 func (d *DB) SeedDemo(ctx context.Context) error {
@@ -127,6 +133,29 @@ func (d *DB) SeedDemo(ctx context.Context) error {
 		ON CONFLICT (id) DO NOTHING`); err != nil {
 		return err
 	}
+
+	// usuário normal de teste (sem superadmin)
+	testHash, _ := bcrypt.GenerateFromPassword([]byte(TestPass), bcrypt.DefaultCost)
+	if _, err := b.Exec(ctx, `INSERT INTO app_user(id,email,name,password_hash) VALUES($1,$2,'Usuário Teste',$3)
+		ON CONFLICT (id) DO UPDATE SET password_hash=EXCLUDED.password_hash`, TestUserID, TestEmail, string(testHash)); err != nil {
+		return err
+	}
+	if _, err := b.Exec(ctx, `INSERT INTO org(id,name,owner_user_id,plan) VALUES($1,'Org Teste',$2,'pro')
+		ON CONFLICT (id) DO NOTHING`, TestOrgID, TestUserID); err != nil {
+		return err
+	}
+	if _, err := b.Exec(ctx, `INSERT INTO membership(id,org_id,user_id,permission_tier) VALUES($1,$2,$3,'owner')
+		ON CONFLICT (org_id,user_id) DO NOTHING`, NewID("mbr"), TestOrgID, TestUserID); err != nil {
+		return err
+	}
+	if _, err := b.Exec(ctx, `INSERT INTO workspace(id,org_id,name,initial) VALUES($1,$2,'Principal','P')
+		ON CONFLICT (id) DO NOTHING`, TestWspID, TestOrgID); err != nil {
+		return err
+	}
+	if _, err := b.Exec(ctx, `INSERT INTO pool_config(id,workspace_id,parallel_workers,retries) VALUES($1,$2,2,2)
+		ON CONFLICT (workspace_id) DO NOTHING`, NewID("pcfg"), TestWspID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -155,15 +184,15 @@ func (d *DB) GetAgentModel(ctx context.Context, key string) string {
 }
 
 type User struct {
-	ID, Email, Hash, OrgID, Role string
+	ID, Email, Hash, OrgID, Role, Status string
 }
 
 func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	var u User
-	err := d.Pool.QueryRow(ctx, `SELECT u.id,u.email,COALESCE(u.password_hash,''),COALESCE(m.org_id,''),COALESCE(m.permission_tier::text,'')
+	err := d.Pool.QueryRow(ctx, `SELECT u.id,u.email,COALESCE(u.password_hash,''),COALESCE(m.org_id,''),COALESCE(m.permission_tier::text,''),u.status::text
 		FROM app_user u LEFT JOIN membership m ON m.user_id=u.id WHERE u.email=$1
 		ORDER BY m.created_at LIMIT 1`, email).
-		Scan(&u.ID, &u.Email, &u.Hash, &u.OrgID, &u.Role)
+		Scan(&u.ID, &u.Email, &u.Hash, &u.OrgID, &u.Role, &u.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -266,10 +295,11 @@ func (d *DB) CreatePinnedWorker(ctx context.Context, orgID, focus, repoID, model
 	return id, err
 }
 
-func (d *DB) ListPinnedWorkers(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListPinnedWorkers(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT p.id, COALESCE(p.focus,'') AS focus, COALESCE(p.repo_id,'') AS repo_id,
 		COALESCE(r.name,'') AS repo_name, p.concurrency, COALESCE(p.settings->>'model','claude_opus') AS model
-		FROM pinned_worker p LEFT JOIN repository r ON r.id=p.repo_id ORDER BY p.created_at DESC`)
+		FROM pinned_worker p LEFT JOIN repository r ON r.id=p.repo_id
+		WHERE ($1='' OR p.workspace_id=$1) ORDER BY p.created_at DESC`, wspID)
 }
 
 func (d *DB) DeletePinnedWorker(ctx context.Context, orgID, id string) error {
@@ -302,6 +332,22 @@ func (d *DB) ListConnections(ctx context.Context, orgID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id, type::text AS type, provider, COALESCE(label,'') AS label,
 		status::text AS status, to_char(created_at,'YYYY-MM-DD HH24:MI') AS created
 		FROM connection ORDER BY created_at DESC`)
+}
+
+// SetAIEngine define o motor de IA da org (assinatura Claude ou API Anthropic).
+// Só um motor de IA fica ativo por vez — substitui o anterior.
+func (d *DB) SetAIEngine(ctx context.Context, orgID, kind, provider, label string) (string, error) {
+	id := NewID("con")
+	st, _ := json.Marshal(map[string]string{"kind": kind})
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type='ai_engine'`, orgID); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO connection(id,org_id,type,provider,label,status,settings)
+			VALUES($1,$2,'ai_engine',$3,$4,'ok',$5::jsonb)`, id, orgID, provider, label, string(st))
+		return e
+	})
+	return id, err
 }
 
 // GetOrgPlan devolve o plano da org (p/ rate limit por plano).
@@ -382,9 +428,9 @@ func (d *DB) CreateMemory(ctx context.Context, orgID, wspID, scope, repoID, inst
 	return id, err
 }
 
-func (d *DB) ListMemories(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListMemories(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,scope::text AS scope,COALESCE(repo_id,'') AS repo_id,
-		instruction,source::text AS source FROM memory ORDER BY created_at DESC`)
+		instruction,source::text AS source FROM memory WHERE ($1='' OR workspace_id=$1) ORDER BY created_at DESC`, wspID)
 }
 
 // MemoriesForTask devolve as instruções aplicáveis (global + as do repo) — p/ injetar no plano.
@@ -443,9 +489,9 @@ func (d *DB) CreateKBDoc(ctx context.Context, orgID, wspID, name, category, file
 	return id, err
 }
 
-func (d *DB) ListKBDocs(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListKBDocs(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,name,category::text AS category,COALESCE(file_ref,'') AS file_ref,
-		indexed FROM kb_document ORDER BY created_at DESC`)
+		indexed FROM kb_document WHERE ($1='' OR workspace_id=$1) ORDER BY created_at DESC`, wspID)
 }
 
 // ── M5.2: rotinas (schedule/manual -> cria tarefa) ──
@@ -475,12 +521,12 @@ func (d *DB) CreateRoutine(ctx context.Context, orgID, wspID, name, triggerType 
 	return id, err
 }
 
-func (d *DB) ListRoutines(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListRoutines(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,name,trigger_type::text AS trigger,
 		COALESCE((trigger_config->>'interval_sec')::int,0) AS interval_sec,enabled,
 		COALESCE(to_char(last_run_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'') AS last_run,
 		COALESCE(to_char(next_run_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'') AS next_run,
-		COALESCE(action->>'title','') AS action_title FROM routine ORDER BY created_at`)
+		COALESCE(action->>'title','') AS action_title FROM routine WHERE ($1='' OR workspace_id=$1) ORDER BY created_at`, wspID)
 }
 
 // RoutineDue é uma rotina agendada vencida (pronta p/ disparar).
@@ -764,9 +810,9 @@ func (d *DB) CreateRepo(ctx context.Context, orgID, wspID, name, cloneURL, defau
 	return repoID, err
 }
 
-func (d *DB) ListRepos(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListRepos(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,name,default_branch,
-		COALESCE(settings->>'clone_url','') AS clone_url FROM repository ORDER BY created_at DESC`)
+		COALESCE(settings->>'clone_url','') AS clone_url FROM repository WHERE ($1='' OR workspace_id=$1) ORDER BY created_at DESC`, wspID)
 }
 
 // TaskRepo é o repo associado a uma tarefa (vazio se não houver).
@@ -857,20 +903,24 @@ func (d *DB) CreateQAReport(ctx context.Context, taskID string, passed bool, sum
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, NewID("qa"), orgID, taskID, prID, st, total, np, summary)
 }
 
-func (d *DB) ListCI(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListCI(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT c.id,COALESCE(c.provider,'') AS provider,c.status::text AS status,
 		COALESCE(p.task_id,'') AS task_id,COALESCE(p.branch,'') AS branch,COALESCE(p.repo_id,'') AS repo_id,
 		COALESCE(to_char(c.finished_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'') AS finished_at
-		FROM ci_run c JOIN pull_request p ON p.id=c.pr_id ORDER BY c.started_at DESC LIMIT 50`)
+		FROM ci_run c JOIN pull_request p ON p.id=c.pr_id
+		WHERE ($1='' OR p.task_id IN (SELECT id FROM task WHERE workspace_id=$1))
+		ORDER BY c.started_at DESC LIMIT 50`, wspID)
 }
 
-func (d *DB) ListQA(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListQA(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT q.id,COALESCE(q.task_id,'') AS task_id,COALESCE(q.status,'') AS status,
 		COALESCE(q.tests_total,0) AS tests_total,COALESCE(q.tests_passed,0) AS tests_passed,
 		COALESCE(q.coverage,0) AS coverage,COALESCE(q.duration_ms,0) AS duration_ms,
 		COALESCE(q.repo_id,'') AS repo_id,COALESCE(p.branch,'') AS branch,
 		to_char(q.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
-		FROM qa_report q LEFT JOIN pull_request p ON p.id=q.pr_id ORDER BY q.created_at DESC LIMIT 50`)
+		FROM qa_report q LEFT JOIN pull_request p ON p.id=q.pr_id
+		WHERE ($1='' OR q.task_id IN (SELECT id FROM task WHERE workspace_id=$1))
+		ORDER BY q.created_at DESC LIMIT 50`, wspID)
 }
 
 // Telemetry — agregado por org (tarefas por estado, tokens, PRs, worker-hours/sem).
@@ -1006,21 +1056,22 @@ func (d *DB) RecordStepOutput(ctx context.Context, taskID, stepType, status, out
 }
 
 // ListInterventions: tarefas bloqueadas aguardando revisão humana (gate de merge).
-func (d *DB) ListInterventions(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListInterventions(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT t.id AS task_id,t.title,COALESCE(p.branch,'') AS branch,
 		COALESCE(p.ci_status::text,'') AS ci_status,COALESCE(p.ai_review_status::text,'') AS ai_review_status,
 		to_char(t.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
 		FROM task t LEFT JOIN pull_request p ON p.task_id=t.id
-		WHERE t.status='blocked' AND t.blocked_reason='human_review' ORDER BY t.created_at DESC`)
+		WHERE t.status='blocked' AND t.blocked_reason='human_review' AND ($1='' OR t.workspace_id=$1) ORDER BY t.created_at DESC`, wspID)
 }
 
-func (d *DB) ListPRs(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListPRs(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,COALESCE(task_id,'') AS task_id,COALESCE(repo_id,'') AS repo_id,
 		COALESCE(branch,'') AS branch,COALESCE(url,'') AS url,status::text AS status,
 		ci_status::text AS ci_status,ai_review_status::text AS ai_review_status,
 		human_review_status::text AS human_review_status,
 		to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
-		FROM pull_request ORDER BY created_at DESC`)
+		FROM pull_request WHERE ($1='' OR task_id IN (SELECT id FROM task WHERE workspace_id=$1))
+		ORDER BY created_at DESC`, wspID)
 }
 
 func jsonStr(s string) string {
@@ -1354,11 +1405,12 @@ func (d *DB) SavePlan(ctx context.Context, taskID string, steps []PlanStepIn, to
 }
 
 // ListLogs — feed de logs do pipeline (steps com output), RLS-escopado por org (via_task).
-func (d *DB) ListLogs(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListLogs(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT to_char(COALESCE(s.ended_at,s.started_at,now()),'YYYY-MM-DD HH24:MI:SS') AS "when",
 		s.task_id AS task_id, s.type::text AS type, s.status::text AS status, COALESCE(s.output->>'log','') AS log
 		FROM step s WHERE s.status <> 'pending'
-		ORDER BY COALESCE(s.ended_at,s.started_at) DESC NULLS LAST LIMIT 100`)
+		AND ($1='' OR s.task_id IN (SELECT id FROM task WHERE workspace_id=$1))
+		ORDER BY COALESCE(s.ended_at,s.started_at) DESC NULLS LAST LIMIT 100`, wspID)
 }
 
 // ListSteps continua no pool superuser (filtra por task_id; RLS via_task cobre).
@@ -1397,18 +1449,188 @@ func (d *DB) ListSecrets(ctx context.Context, orgID string) ([]Row, error) {
 		location::text AS location FROM secret_ref ORDER BY created_at DESC`)
 }
 
+// ── Admin: superadmin — acesso global, bypassa RLS via d.Pool ──
+
+func (d *DB) adminList(ctx context.Context, sql string, args ...any) ([]Row, error) {
+	rows, err := d.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	fields := rows.FieldDescriptions()
+	for rows.Next() {
+		vals, err := rows.Values()
+		if err != nil {
+			return nil, err
+		}
+		r := Row{}
+		for i, f := range fields {
+			r[string(f.Name)] = vals[i]
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) AdminListOrgs(ctx context.Context) ([]Row, error) {
+	return d.adminList(ctx, `
+		SELECT o.id, o.name, o.plan::text AS plan,
+			to_char(o.created_at,'YYYY-MM-DD') AS created_at,
+			COALESCE(u.email,'') AS owner_email,
+			(SELECT count(*)::int FROM membership m WHERE m.org_id=o.id AND m.status='active') AS members,
+			(SELECT count(*)::int FROM worker_instance w WHERE w.org_id=o.id) AS workers,
+			(SELECT count(*)::int FROM task t WHERE t.org_id=o.id) AS tasks,
+			COALESCE(o.settings->>'suspended','false') AS suspended
+		FROM org o LEFT JOIN app_user u ON u.id=o.owner_user_id
+		ORDER BY o.created_at DESC`)
+}
+
+func (d *DB) AdminListUsers(ctx context.Context) ([]Row, error) {
+	return d.adminList(ctx, `
+		SELECT u.id, u.email, COALESCE(u.name,'') AS name, u.status::text AS status,
+			to_char(u.created_at,'YYYY-MM-DD') AS created_at,
+			COALESCE(m.org_id,'') AS org_id, COALESCE(m.permission_tier::text,'') AS role
+		FROM app_user u LEFT JOIN membership m ON m.user_id=u.id AND m.status='active'
+		ORDER BY u.created_at DESC`)
+}
+
+func (d *DB) AdminStats(ctx context.Context) (Row, error) {
+	var totalOrgs, totalUsers, planFree, planPro, planTeam, planEnterprise, totalTasks, totalWorkers int
+	err := d.Pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM org)::int,
+		(SELECT count(*) FROM app_user)::int,
+		(SELECT count(*) FROM org WHERE plan='free')::int,
+		(SELECT count(*) FROM org WHERE plan='pro')::int,
+		(SELECT count(*) FROM org WHERE plan='team')::int,
+		(SELECT count(*) FROM org WHERE plan='enterprise')::int,
+		(SELECT count(*) FROM task)::int,
+		(SELECT count(*) FROM worker_instance)::int`).
+		Scan(&totalOrgs, &totalUsers, &planFree, &planPro, &planTeam, &planEnterprise, &totalTasks, &totalWorkers)
+	r := Row{
+		"total_orgs": totalOrgs, "total_users": totalUsers,
+		"plan_free": planFree, "plan_pro": planPro, "plan_team": planTeam, "plan_enterprise": planEnterprise,
+		"total_tasks": totalTasks, "total_workers": totalWorkers,
+	}
+	return r, err
+}
+
+func (d *DB) AdminSetOrgPlan(ctx context.Context, orgID, plan string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE org SET plan=$1::org_plan WHERE id=$2`, plan, orgID)
+	return err
+}
+
+func (d *DB) AdminSuspendOrg(ctx context.Context, orgID string, suspend bool) error {
+	val := "false"
+	if suspend {
+		val = "true"
+	}
+	_, err := d.Pool.Exec(ctx,
+		`UPDATE org SET settings=jsonb_set(COALESCE(settings,'{}'), '{suspended}', $1::jsonb) WHERE id=$2`,
+		`"`+val+`"`, orgID)
+	return err
+}
+
+// AdminListAudit: trilha global (todas as orgs). actionPrefix != "" filtra por action LIKE prefix%.
+func (d *DB) AdminListAudit(ctx context.Context, actionPrefix string, limit int) ([]Row, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	return d.adminList(ctx, `
+		SELECT a.id, a.action,
+			COALESCE(a.target_type,'') AS target_type, COALESCE(a.target_id,'') AS target_id,
+			to_char(a.occurred_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS occurred_at,
+			a.org_id, COALESCE(o.name,'') AS org_name,
+			a.actor_type::text AS actor_type, COALESCE(a.actor_id,'') AS actor_id,
+			COALESCE(u.email,'') AS actor_email
+		FROM audit_log a
+		LEFT JOIN org o ON o.id=a.org_id
+		LEFT JOIN app_user u ON u.id=a.actor_id
+		WHERE ($1='' OR a.action LIKE $1||'%')
+		ORDER BY a.occurred_at DESC
+		LIMIT $2`, actionPrefix, limit)
+}
+
+// AdminOrgInfo: 1 org com os mesmos campos do list (ou erro se não existe).
+func (d *DB) AdminOrgInfo(ctx context.Context, orgID string) (Row, error) {
+	rows, err := d.adminList(ctx, `
+		SELECT o.id, o.name, o.plan::text AS plan,
+			to_char(o.created_at,'YYYY-MM-DD') AS created_at,
+			COALESCE(u.email,'') AS owner_email,
+			(SELECT count(*)::int FROM membership m WHERE m.org_id=o.id AND m.status='active') AS members,
+			(SELECT count(*)::int FROM worker_instance w WHERE w.org_id=o.id) AS workers,
+			(SELECT count(*)::int FROM task t WHERE t.org_id=o.id) AS tasks,
+			COALESCE(o.settings->>'suspended','false') AS suspended
+		FROM org o LEFT JOIN app_user u ON u.id=o.owner_user_id
+		WHERE o.id=$1`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return rows[0], nil
+}
+
+// AdminOrgMembers: membros (ativos+convidados) de uma org.
+func (d *DB) AdminOrgMembers(ctx context.Context, orgID string) ([]Row, error) {
+	return d.adminList(ctx, `
+		SELECT u.id, u.email, COALESCE(u.name,'') AS name, u.status::text AS status,
+			m.permission_tier::text AS role, m.status::text AS membership
+		FROM membership m JOIN app_user u ON u.id=m.user_id
+		WHERE m.org_id=$1 AND m.status<>'removed'
+		ORDER BY CASE m.permission_tier WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, u.email`, orgID)
+}
+
+// AdminOrgTasks: tarefas recentes de uma org.
+func (d *DB) AdminOrgTasks(ctx context.Context, orgID string, limit int) ([]Row, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	return d.adminList(ctx, `
+		SELECT id, COALESCE(title,'') AS title, status::text AS status,
+			to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at
+		FROM task WHERE org_id=$1 ORDER BY created_at DESC LIMIT $2`, orgID, limit)
+}
+
+// AdminSetUserStatus: ativa/suspende um usuário (login bloqueado quando suspenso).
+func (d *DB) AdminSetUserStatus(ctx context.Context, userID, status string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE app_user SET status=$1::user_status, updated_at=now() WHERE id=$2`, status, userID)
+	return err
+}
+
+// AdminUserOrg: org "principal" do usuário (1ª membership ativa) — "" se nenhuma.
+func (d *DB) AdminUserOrg(ctx context.Context, userID string) string {
+	var org string
+	_ = d.Pool.QueryRow(ctx, `SELECT org_id FROM membership WHERE user_id=$1 AND status='active'
+		ORDER BY CASE permission_tier WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END LIMIT 1`, userID).Scan(&org)
+	return org
+}
+
+// AdminPlanCatalog: catálogo de planos + nº de orgs e assentos ativos por plano (p/ receita estimada).
+func (d *DB) AdminPlanCatalog(ctx context.Context) ([]Row, error) {
+	return d.adminList(ctx, `
+		SELECT p.id::text AS plan, p.price_cents, p.currency,
+			p.max_workers, p.weekly_worker_hours, p.max_members,
+			(SELECT count(*)::int FROM org o WHERE o.plan=p.id) AS orgs,
+			COALESCE((SELECT count(*)::int FROM membership m JOIN org o ON o.id=m.org_id
+				WHERE o.plan=p.id AND m.status='active'),0) AS seats
+		FROM plan_catalog p
+		ORDER BY CASE p.id WHEN 'free' THEN 0 WHEN 'pro' THEN 1 WHEN 'team' THEN 2 WHEN 'enterprise' THEN 3 ELSE 4 END`)
+}
+
 // Leitura p/ a UI.
 type Row = map[string]any
 
 // Reads do REST: RLS-escopados (sem WHERE org_id — quem isola é o RLS via_org).
-func (d *DB) ListWorkers(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListWorkers(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,source::text AS source,host::text AS host,status::text AS status,
 		COALESCE(current_task_id,'') AS current_task_id,COALESCE(current_step,'') AS current_step
-		FROM worker_instance ORDER BY created_at DESC`)
+		FROM worker_instance WHERE ($1='' OR workspace_id=$1) ORDER BY created_at DESC`, wspID)
 }
 
-func (d *DB) ListTasks(ctx context.Context, orgID string) ([]Row, error) {
+func (d *DB) ListTasks(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,title,status::text AS status,
 		COALESCE(assigned_worker_id,'') AS assigned_worker_id,
-		COALESCE(repo_id,'') AS repo_id FROM task ORDER BY created_at DESC LIMIT 50`)
+		COALESCE(repo_id,'') AS repo_id FROM task WHERE ($1='' OR workspace_id=$1) ORDER BY created_at DESC LIMIT 50`, wspID)
 }
