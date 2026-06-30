@@ -183,6 +183,47 @@ export default function Config() {
     } finally { setIaBusy(false); }
   }
 
+  // ── conexões de código: GitHub / GitLab / Bitbucket (token) ──
+  const [gitModal, setGitModal] = useState<"github" | "gitlab" | "bitbucket" | null>(null);
+  const [gitToken, setGitToken] = useState("");
+  const [gitUser, setGitUser]   = useState("");
+  const [gitBusy, setGitBusy]   = useState(false);
+  const [gitTesting, setGitTesting] = useState(false);
+  const [gitTest, setGitTest]   = useState<{ ok: boolean; msg: string } | null>(null);
+
+  function resetGit() {
+    setGitModal(null); setGitToken(""); setGitUser("");
+    setGitBusy(false); setGitTesting(false); setGitTest(null);
+  }
+
+  async function testGit() {
+    if (!gitToken.trim() || !gitModal) return;
+    setGitTesting(true); setGitTest(null);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/git/test", { provider: gitModal, token: gitToken.trim(), username: gitUser.trim() });
+      setGitTest({ ok: !!r?.ok, msg: r?.message || (r?.ok ? "válido" : "inválido") });
+    } catch (e) {
+      setGitTest({ ok: false, msg: e instanceof Error ? e.message : "falha no teste" });
+    } finally { setGitTesting(false); }
+  }
+
+  async function connectGit() {
+    if (!gitToken.trim() || !gitModal) return;
+    setGitBusy(true);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/git", { provider: gitModal, token: gitToken.trim(), username: gitUser.trim() });
+      if (!r?.ok) { setGitTest({ ok: false, msg: r?.message || "falha ao conectar" }); return; }
+      reloadConns(); resetGit();
+    } catch (e) {
+      setGitTest({ ok: false, msg: e instanceof Error ? e.message : "falha ao conectar" });
+    } finally { setGitBusy(false); }
+  }
+
+  async function disconnectGit(provider: string) {
+    await apiDelete(`/v1/connections/git?provider=${provider}`);
+    reloadConns();
+  }
+
   const loadPool = useCallback(() => {
     apiGet<Pool>("/v1/pool").then((x) => { if (!(x as any)?.error) setPool(x); }).catch(() => {});
   }, []);
@@ -604,6 +645,42 @@ export default function Config() {
               );})}
               <InfoNote>Escolha um método para o motor de IA processar tarefas. Assinatura usa sua conta Claude.ai; API usa chave própria faturada por token.</InfoNote>
             </div>
+          ) : connTab === "codigo" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {([
+                { key: "github" as const,    title: "GitHub",    sub: "Personal access token (repo, workflow).", iconPath: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" },
+                { key: "gitlab" as const,    title: "GitLab",    sub: "Personal access token (api, read_repository).", iconPath: "M12 21l3.5-7H8.5L12 21zM12 21L3 10l1.5-5L8.5 14M12 21l9-11-1.5-5L15.5 14" },
+                { key: "bitbucket" as const, title: "Bitbucket", sub: "Usuário + app password (repository, pull request).", iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
+              ]).map(({ key, title, sub, iconPath }) => {
+                const c = (conns || []).find((x) => x.type === "code" && x.provider === key);
+                const active = !!c;
+                return (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 16, padding: "18px 20px", background: "var(--card)", border: active ? "1px solid var(--green)" : "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", flexWrap: "wrap" }}>
+                    <div style={{ width: 42, height: 42, flexShrink: 0, borderRadius: 11, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={iconPath}/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{title}</span>
+                        {active && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: "var(--green)", background: "rgba(63,185,80,.12)", border: "1px solid rgba(63,185,80,.4)", borderRadius: 5, padding: "1px 7px" }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4 10-10"/></svg>{c?.label || "Conectado"}</span>}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "var(--mute)", marginTop: 3 }}>{sub}</div>
+                    </div>
+                    {active ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button style={{ ...sFilledBtn, background: "transparent", color: "var(--ink)", border: "1px solid var(--border)" }} onClick={() => { resetGit(); setGitModal(key); }}>Reconectar</button>
+                        <button title="Desconectar" style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, border: "1px solid rgba(248,81,73,.4)", background: "var(--red-tint)", color: "var(--red)", cursor: "pointer" }} onClick={() => disconnectGit(key)}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <button style={sFilledBtn} onClick={() => { resetGit(); setGitModal(key); }}>Conectar</button>
+                    )}
+                  </div>
+                );
+              })}
+              <InfoNote>Conecte os provedores de código. O token é validado na hora contra a API do provedor. Os tokens ficam em Segredos.</InfoNote>
+            </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
               {(conns || []).map((c) => (
@@ -782,6 +859,50 @@ export default function Config() {
           </div>
         </Modal>
       )}
+
+      {gitModal && (() => {
+        const meta: Record<string, { title: string; tokenLabel: string; tokenHint: string; help: string; docs: string }> = {
+          github:    { title: "GitHub",    tokenLabel: "Personal access token", tokenHint: "ghp_… ou github_pat_…", help: "Crie em github.com/settings/tokens com escopo repo (e workflow para CI).", docs: "https://github.com/settings/tokens" },
+          gitlab:    { title: "GitLab",    tokenLabel: "Personal access token", tokenHint: "glpat-…",               help: "Crie em GitLab → Settings → Access Tokens com escopos api e read_repository.", docs: "https://gitlab.com/-/user_settings/personal_access_tokens" },
+          bitbucket: { title: "Bitbucket", tokenLabel: "App password",          tokenHint: "app password",            help: "Crie em Bitbucket → Personal settings → App passwords (repository, pull requests).", docs: "https://bitbucket.org/account/settings/app-passwords/" },
+        };
+        const m = meta[gitModal];
+        return (
+        <Modal title={`Conectar ${m.title}`} onClose={resetGit}
+          footer={<>
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetGit}>Cancelar</button>
+            <button style={{ ...btn, opacity: gitBusy || !gitToken.trim() || (gitModal === "bitbucket" && !gitUser.trim()) ? .6 : 1, pointerEvents: gitBusy || !gitToken.trim() || (gitModal === "bitbucket" && !gitUser.trim()) ? "none" : "auto" }} onClick={connectGit}>{gitBusy ? "Conectando…" : "Conectar"}</button>
+          </>}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {gitModal === "bitbucket" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Usuário Bitbucket</span>
+                <input style={input} value={gitUser} onChange={(e) => { setGitUser(e.target.value); setGitTest(null); }} placeholder="seu_usuario" />
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>{m.tokenLabel}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={{ ...input, flex: 1 }} type="password" value={gitToken} onChange={(e) => { setGitToken(e.target.value); setGitTest(null); }} placeholder={m.tokenHint} />
+                <button style={{ height: 38, padding: "0 14px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer", opacity: gitTesting || !gitToken.trim() ? .6 : 1, pointerEvents: gitTesting || !gitToken.trim() ? "none" : "auto" }} onClick={testGit}>{gitTesting ? "Testando…" : "Testar"}</button>
+              </div>
+              {gitTest && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: gitTest.ok ? "var(--green)" : "var(--red)", marginTop: 2 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    {gitTest.ok ? <path d="M5 12l4 4 10-10"/> : <><path d="M18 6L6 18"/><path d="M6 6l12 12"/></>}
+                  </svg>
+                  {gitTest.msg}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "14px 16px", background: "var(--accent-tint)", border: "1px solid rgba(245,166,35,.25)", borderRadius: 10 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+              <span style={{ fontSize: 12, color: "var(--mute)", lineHeight: 1.5 }}>{m.help} <a href={m.docs} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>Abrir página de tokens →</a></span>
+            </div>
+          </div>
+        </Modal>
+        );
+      })()}
 
       {pwOpen && (
         <Modal title="Adicionar worker dedicado" onClose={() => setPwOpen(false)}

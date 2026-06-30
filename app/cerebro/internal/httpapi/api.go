@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,6 +99,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections", a.connections)           // GET conexões / POST motor IA
 	mux.HandleFunc("/v1/connections/claude/", a.claudeAuth)    // POST start|code|cancel (OAuth assinatura)
 	mux.HandleFunc("/v1/connections/anthropic/test", a.anthropicTest) // POST valida API key
+	mux.HandleFunc("/v1/connections/git", a.gitConnect)               // POST conecta (valida+grava) / DELETE desconecta
+	mux.HandleFunc("/v1/connections/git/test", a.gitTest)             // POST valida token de código
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -994,6 +997,148 @@ func (a *API) anthropicTest(w http.ResponseWriter, r *http.Request) {
 		msg = "resposta inesperada da Anthropic (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
 	}
 	writeJSON(w, 200, map[string]any{"ok": false, "status": resp.StatusCode, "message": msg})
+}
+
+// providerLabels: nomes amigáveis dos providers de código.
+var providerLabels = map[string]string{"github": "GitHub", "gitlab": "GitLab", "bitbucket": "Bitbucket"}
+
+// validateGitToken valida o token contra a API do provider e devolve o
+// identificador da conta (login/username). who vazio => inválido.
+func (a *API) validateGitToken(ctx context.Context, provider, token, username string) (ok bool, who string, status int, msg string) {
+	var url string
+	hdr := map[string]string{}
+	switch provider {
+	case "github":
+		url = "https://api.github.com/user"
+		hdr["Authorization"] = "Bearer " + token
+		hdr["Accept"] = "application/vnd.github+json"
+		hdr["User-Agent"] = "apifor.dev"
+	case "gitlab":
+		url = "https://gitlab.com/api/v4/user"
+		hdr["Authorization"] = "Bearer " + token
+	case "bitbucket":
+		if username == "" {
+			return false, "", 400, "Bitbucket exige usuário + app password"
+		}
+		url = "https://api.bitbucket.org/2.0/user"
+		hdr["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+token))
+	default:
+		return false, "", 400, "provider inválido"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return false, "", 500, err.Error()
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return false, "", 502, "falha de rede: " + err.Error()
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode != 200 {
+		m := "token inválido ou sem permissão"
+		if resp.StatusCode == 429 {
+			m = "rate limit — tente de novo"
+		}
+		return false, "", resp.StatusCode, m
+	}
+	var u struct {
+		Login       string `json:"login"`        // github
+		Username    string `json:"username"`     // gitlab / bitbucket
+		DisplayName string `json:"display_name"` // bitbucket
+	}
+	_ = json.Unmarshal(body, &u)
+	who = u.Login
+	if who == "" {
+		who = u.Username
+	}
+	if who == "" {
+		who = u.DisplayName
+	}
+	if who == "" {
+		who = providerLabels[provider]
+	}
+	return true, who, 200, "conectado como " + who
+}
+
+type gitBody struct {
+	Provider string `json:"provider"`
+	Token    string `json:"token"`
+	Username string `json:"username"`
+}
+
+// gitTest valida um token de código (GitHub/GitLab/Bitbucket) sem gravar nada.
+func (a *API) gitTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var in gitBody
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if strings.TrimSpace(in.Token) == "" {
+		writeJSON(w, 400, errBody("bad_request", "token vazio"))
+		return
+	}
+	ok, who, _, msg := a.validateGitToken(r.Context(), in.Provider, strings.TrimSpace(in.Token), strings.TrimSpace(in.Username))
+	writeJSON(w, 200, map[string]any{"ok": ok, "who": who, "message": msg})
+}
+
+// gitConnect: POST valida + grava a conexão de código; DELETE desconecta.
+func (a *API) gitConnect(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	org := a.orgFrom(r)
+	if r.Method == http.MethodDelete {
+		prov := strings.TrimSpace(r.URL.Query().Get("provider"))
+		if _, ok := providerLabels[prov]; !ok {
+			writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+			return
+		}
+		if err := a.DB.DeleteCodeProvider(r.Context(), org, prov); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "connection.code.delete", "connection", prov)
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST/DELETE"))
+		return
+	}
+	var in gitBody
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if _, ok := providerLabels[in.Provider]; !ok {
+		writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+		return
+	}
+	if strings.TrimSpace(in.Token) == "" {
+		writeJSON(w, 400, errBody("bad_request", "token vazio"))
+		return
+	}
+	ok, who, _, msg := a.validateGitToken(r.Context(), in.Provider, strings.TrimSpace(in.Token), strings.TrimSpace(in.Username))
+	if !ok {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": msg})
+		return
+	}
+	label := who
+	if in.Provider == "bitbucket" && in.Username != "" {
+		label = in.Username
+	}
+	id, err := a.DB.SetCodeProvider(r.Context(), org, in.Provider, label)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	a.recordAudit(r, "connection.code.set", "connection", id)
+	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).
