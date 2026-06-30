@@ -373,6 +373,29 @@ func (d *DB) DeleteCodeProvider(ctx context.Context, orgID, provider string) err
 	})
 }
 
+// SetTaskSource registra/atualiza uma fonte de tarefas (GitHub/GitLab/
+// Bitbucket issues+PRs, Jira, Trello). Um por provider.
+func (d *DB) SetTaskSource(ctx context.Context, orgID, provider, label string) (string, error) {
+	id := NewID("con")
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type='tasks' AND provider=$2`, orgID, provider); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO connection(id,org_id,type,provider,label,status,settings)
+			VALUES($1,$2,'tasks',$3,$4,'ok','{}'::jsonb)`, id, orgID, provider, label)
+		return e
+	})
+	return id, err
+}
+
+// DeleteTaskSource remove a fonte de tarefas de um provider.
+func (d *DB) DeleteTaskSource(ctx context.Context, orgID, provider string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type='tasks' AND provider=$2`, orgID, provider)
+		return e
+	})
+}
+
 // GetOrgPlan devolve o plano da org (p/ rate limit por plano).
 func (d *DB) GetOrgPlan(ctx context.Context, orgID string) string {
 	var p string

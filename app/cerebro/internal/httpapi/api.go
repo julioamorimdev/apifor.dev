@@ -68,6 +68,7 @@ type ghFlow struct {
 	status    string // pending | authorized | expired | denied | error
 	login     string
 	errMsg    string
+	purpose   string // "code" (default) | "tasks" — onde gravar a conexão
 }
 
 // tokenTTL devolve a validade configurada ou o default (12h).
@@ -126,6 +127,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/git/test", a.gitTest)             // POST valida token de código
 	mux.HandleFunc("/v1/connections/git/github/device", a.githubDeviceStart)  // POST inicia device-flow
 	mux.HandleFunc("/v1/connections/git/github/device/status", a.githubDeviceStatus) // GET status do device-flow
+	mux.HandleFunc("/v1/connections/tasks", a.tasksConnect)    // POST conecta fonte de tarefas / DELETE desconecta
+	mux.HandleFunc("/v1/connections/tasks/test", a.tasksTest)  // POST valida credencial da fonte de tarefas
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -1177,6 +1180,14 @@ func (a *API) githubDeviceStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org := a.orgFrom(r)
+	var startBody struct {
+		Purpose string `json:"purpose"` // "code" (default) | "tasks"
+	}
+	_ = json.NewDecoder(r.Body).Decode(&startBody)
+	purpose := "code"
+	if startBody.Purpose == "tasks" {
+		purpose = "tasks"
+	}
 	form := url.Values{"client_id": {a.GitHubOAuthClientID}, "scope": {"repo workflow"}}
 	req, _ := http.NewRequestWithContext(r.Context(), "POST", "https://github.com/login/device/code", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1206,9 +1217,9 @@ func (a *API) githubDeviceStart(w http.ResponseWriter, r *http.Request) {
 		dc.ExpiresIn = 900
 	}
 	a.ghMu.Lock()
-	a.ghFlows[org] = &ghFlow{userCode: dc.UserCode, verifyURI: dc.VerificationURI, status: "pending"}
+	a.ghFlows[org] = &ghFlow{userCode: dc.UserCode, verifyURI: dc.VerificationURI, status: "pending", purpose: purpose}
 	a.ghMu.Unlock()
-	go a.pollGitHubDevice(org, dc.DeviceCode, dc.Interval, dc.ExpiresIn)
+	go a.pollGitHubDevice(org, dc.DeviceCode, dc.Interval, dc.ExpiresIn, purpose)
 	writeJSON(w, 200, map[string]any{
 		"user_code": dc.UserCode, "verification_uri": dc.VerificationURI,
 		"interval": dc.Interval, "expires_in": dc.ExpiresIn,
@@ -1217,7 +1228,7 @@ func (a *API) githubDeviceStart(w http.ResponseWriter, r *http.Request) {
 
 // pollGitHubDevice faz o polling do access_token até autorizar/expirar e, no
 // sucesso, valida o token e grava a conexão de código (provider github).
-func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int) {
+func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int, purpose string) {
 	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
 	set := func(status, login, errMsg string) {
 		a.ghMu.Lock()
@@ -1249,8 +1260,10 @@ func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int) 
 		if tok.AccessToken != "" {
 			ok, login, _, _ := a.validateGitToken(context.Background(), "github", tok.AccessToken, "")
 			if ok {
-				if id, e := a.DB.SetCodeProvider(context.Background(), org, "github", login); e == nil {
-					_ = id
+				if purpose == "tasks" {
+					_, _ = a.DB.SetTaskSource(context.Background(), org, "github", login)
+				} else {
+					_, _ = a.DB.SetCodeProvider(context.Background(), org, "github", login)
 				}
 				set("authorized", login, "")
 			} else {
@@ -1291,6 +1304,152 @@ func (a *API) githubDeviceStatus(w http.ResponseWriter, r *http.Request) {
 		"status": f.status, "login": f.login, "error": f.errMsg,
 		"user_code": f.userCode, "verification_uri": f.verifyURI,
 	})
+}
+
+// taskSourceLabels: providers de fonte de tarefas suportados.
+var taskSourceLabels = map[string]string{
+	"github": "GitHub", "gitlab": "GitLab", "bitbucket": "Bitbucket",
+	"jira": "Jira", "trello": "Trello",
+}
+
+type taskBody struct {
+	Provider string `json:"provider"`
+	Token    string `json:"token"`    // PAT / api token / trello token
+	Username string `json:"username"` // bitbucket
+	Email    string `json:"email"`    // jira
+	Site     string `json:"site"`     // jira (ex: empresa.atlassian.net)
+	Key      string `json:"key"`      // trello api key
+}
+
+// validateTaskSource valida a credencial da fonte de tarefas contra a API do
+// provider. github/gitlab/bitbucket reaproveitam validateGitToken.
+func (a *API) validateTaskSource(ctx context.Context, in taskBody) (ok bool, who string, msg string) {
+	switch in.Provider {
+	case "github", "gitlab", "bitbucket":
+		o, w2, _, m := a.validateGitToken(ctx, in.Provider, strings.TrimSpace(in.Token), strings.TrimSpace(in.Username))
+		return o, w2, m
+	case "jira":
+		site := strings.TrimSpace(in.Site)
+		site = strings.TrimPrefix(strings.TrimPrefix(site, "https://"), "http://")
+		site = strings.TrimSuffix(site, "/")
+		if site == "" || strings.TrimSpace(in.Email) == "" || strings.TrimSpace(in.Token) == "" {
+			return false, "", "Jira exige site, e-mail e API token"
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+site+"/rest/api/3/myself", nil)
+		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(in.Email)+":"+strings.TrimSpace(in.Token))))
+		req.Header.Set("Accept", "application/json")
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return false, "", "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return false, "", "credencial Jira inválida (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+		}
+		var u struct {
+			DisplayName  string `json:"displayName"`
+			EmailAddress string `json:"emailAddress"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&u)
+		who = u.DisplayName
+		if who == "" {
+			who = u.EmailAddress
+		}
+		return true, who, "conectado como " + who
+	case "trello":
+		key, token := strings.TrimSpace(in.Key), strings.TrimSpace(in.Token)
+		if key == "" || token == "" {
+			return false, "", "Trello exige API key + token"
+		}
+		q := url.Values{"key": {key}, "token": {token}}
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.trello.com/1/members/me?"+q.Encode(), nil)
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return false, "", "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return false, "", "credencial Trello inválida (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+		}
+		var u struct {
+			Username string `json:"username"`
+			FullName string `json:"fullName"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&u)
+		who = u.FullName
+		if who == "" {
+			who = u.Username
+		}
+		return true, who, "conectado como " + who
+	}
+	return false, "", "provider inválido"
+}
+
+// tasksTest valida a credencial da fonte de tarefas sem gravar.
+func (a *API) tasksTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var in taskBody
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if _, ok := taskSourceLabels[in.Provider]; !ok {
+		writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+		return
+	}
+	ok, who, msg := a.validateTaskSource(r.Context(), in)
+	writeJSON(w, 200, map[string]any{"ok": ok, "who": who, "message": msg})
+}
+
+// tasksConnect: POST valida + grava a fonte de tarefas; DELETE desconecta.
+func (a *API) tasksConnect(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	org := a.orgFrom(r)
+	if r.Method == http.MethodDelete {
+		prov := strings.TrimSpace(r.URL.Query().Get("provider"))
+		if _, ok := taskSourceLabels[prov]; !ok {
+			writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+			return
+		}
+		if err := a.DB.DeleteTaskSource(r.Context(), org, prov); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "connection.tasks.delete", "connection", prov)
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST/DELETE"))
+		return
+	}
+	var in taskBody
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if _, ok := taskSourceLabels[in.Provider]; !ok {
+		writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+		return
+	}
+	ok, who, msg := a.validateTaskSource(r.Context(), in)
+	if !ok {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": msg})
+		return
+	}
+	label := who
+	if in.Provider == "bitbucket" && in.Username != "" {
+		label = in.Username
+	}
+	id, err := a.DB.SetTaskSource(r.Context(), org, in.Provider, label)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	a.recordAudit(r, "connection.tasks.set", "connection", id)
+	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).

@@ -26,12 +26,17 @@ services:
       - |
         set -e
         DB=postgresql://postgres:pg@postgres/apifor
-        if [ "$$(psql "$$DB" -tAc "select to_regclass('public.plan_catalog')")" = "plan_catalog" ]; then
-          echo "schema já aplicado; pulando"
-          exit 0
+        if [ "$$(psql "$$DB" -tAc "select to_regclass('public.plan_catalog')")" != "plan_catalog" ]; then
+          for f in /sql/001_schema.sql /sql/002_rls.sql /sql/003_seeds.sql /sql/004_rls_role.sql /sql/005_worker_role.sql; do
+            echo "applying $$f"
+            psql "$$DB" -v ON_ERROR_STOP=1 -f "$$f"
+          done
+        else
+          echo "schema base já aplicado; pulando 001-005"
         fi
-        for f in /sql/001_schema.sql /sql/002_rls.sql /sql/003_seeds.sql /sql/004_rls_role.sql /sql/005_worker_role.sql; do
-          echo "applying $$f"
+        # patches idempotentes — rodam sempre (seguros p/ reaplicar)
+        for f in /sql/006_task_source.sql; do
+          echo "applying patch $$f"
           psql "$$DB" -v ON_ERROR_STOP=1 -f "$$f"
         done
         echo "migrations done"

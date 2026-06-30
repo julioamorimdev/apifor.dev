@@ -191,10 +191,12 @@ export default function Config() {
   const [gitTesting, setGitTesting] = useState(false);
   const [gitTest, setGitTest]   = useState<{ ok: boolean; msg: string } | null>(null);
 
-  // GitHub device-flow (OAuth) — alternativa ao token
+  // GitHub device-flow (OAuth) — alternativa ao token (código e tarefas)
   const [ghMethod, setGhMethod] = useState<"oauth" | "token">("oauth");
   const [ghDevice, setGhDevice] = useState<{ user_code: string; verification_uri: string } | null>(null);
   const [ghStatus, setGhStatus] = useState("");
+  const [ghErr, setGhErr]       = useState("");
+  const [ghStarting, setGhStarting] = useState(false);
   const ghPoll = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function stopGhPoll() { if (ghPoll.current) { clearInterval(ghPoll.current); ghPoll.current = null; } }
@@ -203,13 +205,15 @@ export default function Config() {
     stopGhPoll();
     setGitModal(null); setGitToken(""); setGitUser("");
     setGitBusy(false); setGitTesting(false); setGitTest(null);
-    setGhMethod("oauth"); setGhDevice(null); setGhStatus("");
+    setGhMethod("oauth"); setGhDevice(null); setGhStatus(""); setGhErr(""); setGhStarting(false);
   }
 
-  async function startGithubDevice() {
-    setGitBusy(true); setGitTest(null); setGhStatus("");
+  // device-flow do GitHub reutilizável: purpose "code" (conexão de código) ou
+  // "tasks" (fonte de tarefas). O backend grava no tipo certo.
+  async function startGithubDevice(purpose: "code" | "tasks") {
+    setGhStarting(true); setGhErr(""); setGhStatus(""); setGhDevice(null);
     try {
-      const r = await apiPost<{ user_code?: string; verification_uri?: string; interval?: number; error?: { message?: string } }>("/v1/connections/git/github/device", {});
+      const r = await apiPost<{ user_code?: string; verification_uri?: string; interval?: number; error?: { message?: string } }>("/v1/connections/git/github/device", { purpose });
       if (!r?.user_code || !r?.verification_uri) throw new Error(r?.error?.message || "falha ao iniciar OAuth");
       setGhDevice({ user_code: r.user_code, verification_uri: r.verification_uri });
       setGhStatus("pending");
@@ -219,15 +223,15 @@ export default function Config() {
         try {
           const s = await apiGet<{ status?: string; login?: string; error?: string }>("/v1/connections/git/github/device/status");
           setGhStatus(s?.status || "");
-          if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); }
+          if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); resetTask(); }
           else if (s?.status === "expired" || s?.status === "denied" || s?.status === "error") {
-            stopGhPoll(); setGhDevice(null); setGitTest({ ok: false, msg: s?.error || "autorização falhou" });
+            stopGhPoll(); setGhDevice(null); setGhErr(s?.error || "autorização falhou");
           }
         } catch { /* segue tentando */ }
       }, Math.max(2, r.interval || 5) * 1000);
     } catch (e) {
-      setGitTest({ ok: false, msg: e instanceof Error ? e.message : "falha ao iniciar OAuth" });
-    } finally { setGitBusy(false); }
+      setGhErr(e instanceof Error ? e.message : "falha ao iniciar OAuth");
+    } finally { setGhStarting(false); }
   }
 
   useEffect(() => () => stopGhPoll(), []);
@@ -257,6 +261,53 @@ export default function Config() {
 
   async function disconnectGit(provider: string) {
     await apiDelete(`/v1/connections/git?provider=${provider}`);
+    reloadConns();
+  }
+
+  // ── fonte de tarefas: GitHub / GitLab / Bitbucket / Jira / Trello ──
+  type TaskProv = "github" | "gitlab" | "bitbucket" | "jira" | "trello";
+  const [taskModal, setTaskModal] = useState<TaskProv | null>(null);
+  const [taskF, setTaskF] = useState({ token: "", username: "", email: "", site: "", key: "" });
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskTesting, setTaskTesting] = useState(false);
+  const [taskTest, setTaskTest] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  function resetTask() {
+    stopGhPoll();
+    setTaskModal(null); setTaskF({ token: "", username: "", email: "", site: "", key: "" });
+    setTaskBusy(false); setTaskTesting(false); setTaskTest(null);
+    setGhMethod("oauth"); setGhDevice(null); setGhStatus(""); setGhErr(""); setGhStarting(false);
+  }
+
+  function taskPayload(provider: TaskProv) {
+    return { provider, token: taskF.token.trim(), username: taskF.username.trim(), email: taskF.email.trim(), site: taskF.site.trim(), key: taskF.key.trim() };
+  }
+
+  async function testTask() {
+    if (!taskModal) return;
+    setTaskTesting(true); setTaskTest(null);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/tasks/test", taskPayload(taskModal));
+      setTaskTest({ ok: !!r?.ok, msg: r?.message || (r?.ok ? "válido" : "inválido") });
+    } catch (e) {
+      setTaskTest({ ok: false, msg: e instanceof Error ? e.message : "falha no teste" });
+    } finally { setTaskTesting(false); }
+  }
+
+  async function connectTask() {
+    if (!taskModal) return;
+    setTaskBusy(true);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/tasks", taskPayload(taskModal));
+      if (!r?.ok) { setTaskTest({ ok: false, msg: r?.message || "falha ao conectar" }); return; }
+      reloadConns(); resetTask();
+    } catch (e) {
+      setTaskTest({ ok: false, msg: e instanceof Error ? e.message : "falha ao conectar" });
+    } finally { setTaskBusy(false); }
+  }
+
+  async function disconnectTask(provider: string) {
+    await apiDelete(`/v1/connections/tasks?provider=${provider}`);
     reloadConns();
   }
 
@@ -717,6 +768,44 @@ export default function Config() {
               })}
               <InfoNote>Conecte os provedores de código. O token é validado na hora contra a API do provedor. Os tokens ficam em Segredos.</InfoNote>
             </div>
+          ) : connTab === "tarefas" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {([
+                { key: "github" as const,    title: "GitHub Issues & PRs",    sub: "Tarefas de issues e pull requests do GitHub.",       iconPath: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" },
+                { key: "gitlab" as const,    title: "GitLab Issues & MRs",    sub: "Tarefas de issues e merge requests do GitLab.",       iconPath: "M12 21l3.5-7H8.5L12 21zM12 21L3 10l1.5-5L8.5 14M12 21l9-11-1.5-5L15.5 14" },
+                { key: "bitbucket" as const, title: "Bitbucket Issues & PRs", sub: "Tarefas de issues e pull requests do Bitbucket.",   iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
+                { key: "jira" as const,      title: "Jira",                  sub: "Tarefas dos seus projetos Jira (e-mail + API token).", iconPath: "M12 2L3 11l9 9 9-9-9-9zM12 7l4 4-4 4-4-4 4-4z" },
+                { key: "trello" as const,    title: "Trello",                sub: "Cards dos seus boards Trello (API key + token).",     iconPath: "M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM7 7h4v9H7zM13 7h4v5h-4z" },
+              ]).map(({ key, title, sub, iconPath }) => {
+                const c = (conns || []).find((x) => x.type === "tasks" && x.provider === key);
+                const active = !!c;
+                return (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 16, padding: "18px 20px", background: "var(--card)", border: active ? "1px solid var(--green)" : "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", flexWrap: "wrap" }}>
+                    <div style={{ width: 42, height: 42, flexShrink: 0, borderRadius: 11, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={iconPath}/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{title}</span>
+                        {active && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: "var(--green)", background: "rgba(63,185,80,.12)", border: "1px solid rgba(63,185,80,.4)", borderRadius: 5, padding: "1px 7px" }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4 10-10"/></svg>{c?.label || "Conectado"}</span>}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "var(--mute)", marginTop: 3 }}>{sub}</div>
+                    </div>
+                    {active ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button style={{ ...sFilledBtn, background: "transparent", color: "var(--ink)", border: "1px solid var(--border)" }} onClick={() => { resetTask(); setTaskModal(key); }}>Reconectar</button>
+                        <button title="Desconectar" style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, border: "1px solid rgba(248,81,73,.4)", background: "var(--red-tint)", color: "var(--red)", cursor: "pointer" }} onClick={() => disconnectTask(key)}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <button style={sFilledBtn} onClick={() => { resetTask(); setTaskModal(key); }}>Conectar</button>
+                    )}
+                  </div>
+                );
+              })}
+              <InfoNote>De onde vêm as tarefas dos workers. GitHub aceita OAuth ou token; os demais por token/API. Credenciais validadas na hora.</InfoNote>
+            </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
               {(conns || []).map((c) => (
@@ -927,8 +1016,8 @@ export default function Config() {
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>
                   </div>
                   <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto. Sem criar token manualmente.</span>
-                  {gitTest && !gitTest.ok && <span style={{ fontSize: 12, color: "var(--red)" }}>{gitTest.msg}</span>}
-                  <button style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 8, opacity: gitBusy ? .6 : 1, pointerEvents: gitBusy ? "none" : "auto" }} onClick={startGithubDevice}>{gitBusy ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                  {ghErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{ghErr}</span>}
+                  <button style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 8, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice("code")}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
@@ -966,6 +1055,76 @@ export default function Config() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
               <span style={{ fontSize: 12, color: "var(--mute)", lineHeight: 1.5 }}>{m.help} <a href={m.docs} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>Abrir página de tokens →</a></span>
             </div>
+            </>)}
+          </div>
+        </Modal>
+        );
+      })()}
+
+      {taskModal && (() => {
+        const titles: Record<TaskProv, string> = { github: "GitHub Issues & PRs", gitlab: "GitLab Issues & MRs", bitbucket: "Bitbucket Issues & PRs", jira: "Jira", trello: "Trello" };
+        const ready = taskModal === "bitbucket" ? !!(taskF.username.trim() && taskF.token.trim())
+          : taskModal === "jira" ? !!(taskF.site.trim() && taskF.email.trim() && taskF.token.trim())
+          : taskModal === "trello" ? !!(taskF.key.trim() && taskF.token.trim())
+          : !!taskF.token.trim();
+        const oauthMode = taskModal === "github" && ghMethod === "oauth";
+        const lbl = (s: string) => <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>{s}</span>;
+        const field = (s: string, k: "token" | "username" | "email" | "site" | "key", ph: string, pwd?: boolean) => (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{lbl(s)}
+            <input style={input} type={pwd ? "password" : "text"} value={(taskF as any)[k]} onChange={(e) => { setTaskF({ ...taskF, [k]: e.target.value }); setTaskTest(null); }} placeholder={ph} />
+          </div>
+        );
+        return (
+        <Modal title={`Conectar ${titles[taskModal]}`} onClose={resetTask}
+          footer={oauthMode ? (
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetTask}>Fechar</button>
+          ) : <>
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetTask}>Cancelar</button>
+            <button style={{ ...btn, opacity: taskBusy || !ready ? .6 : 1, pointerEvents: taskBusy || !ready ? "none" : "auto" }} onClick={connectTask}>{taskBusy ? "Conectando…" : "Conectar"}</button>
+          </>}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {taskModal === "github" && (
+              <div style={{ display: "flex", gap: 6, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 9, padding: 4 }}>
+                {([["oauth", "OAuth"], ["token", "Token"]] as [typeof ghMethod, string][]).map(([k, l]) => (
+                  <button key={k} onClick={() => { setGhMethod(k); setTaskTest(null); }} style={{ flex: 1, height: 32, borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600, background: ghMethod === k ? "var(--card)" : "transparent", color: ghMethod === k ? "var(--ink)" : "var(--dim)" }}>{l}</button>
+                ))}
+              </div>
+            )}
+            {oauthMode ? (
+              !ghDevice ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 16, padding: "10px 8px 4px" }}>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto.</span>
+                  {ghErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{ghErr}</span>}
+                  <button style={{ ...btn, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice("tasks")}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)" }}>Em <a href={ghDevice.verification_uri} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>{ghDevice.verification_uri.replace("https://", "")}</a> digite o código:</span>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 26, fontWeight: 700, letterSpacing: 4, color: "var(--ink)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 20px" }}>{ghDevice.user_code}</div>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--mute)" }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+                    {ghStatus === "pending" ? "aguardando autorização no GitHub…" : ghStatus}
+                  </span>
+                </div>
+              )
+            ) : (<>
+              {taskModal === "jira" && field("Site Jira", "site", "empresa.atlassian.net")}
+              {taskModal === "jira" && field("E-mail", "email", "voce@empresa.com")}
+              {taskModal === "bitbucket" && field("Usuário Bitbucket", "username", "seu_usuario")}
+              {taskModal === "trello" && field("API key", "key", "sua api key")}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {lbl(taskModal === "jira" ? "API token" : taskModal === "trello" ? "Token" : taskModal === "bitbucket" ? "App password" : "Personal access token")}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ ...input, flex: 1 }} type="password" value={taskF.token} onChange={(e) => { setTaskF({ ...taskF, token: e.target.value }); setTaskTest(null); }} placeholder="cole aqui" />
+                  <button style={{ height: 38, padding: "0 14px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer", opacity: taskTesting || !ready ? .6 : 1, pointerEvents: taskTesting || !ready ? "none" : "auto" }} onClick={testTask}>{taskTesting ? "Testando…" : "Testar"}</button>
+                </div>
+                {taskTest && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: taskTest.ok ? "var(--green)" : "var(--red)", marginTop: 2 }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">{taskTest.ok ? <path d="M5 12l4 4 10-10"/> : <><path d="M18 6L6 18"/><path d="M6 6l12 12"/></>}</svg>
+                    {taskTest.msg}
+                  </span>
+                )}
+              </div>
             </>)}
           </div>
         </Modal>
