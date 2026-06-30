@@ -365,6 +365,37 @@ func (d *DB) SetCodeProvider(ctx context.Context, orgID, provider, label string)
 	return id, err
 }
 
+// SetCodeProviderToken igual a SetCodeProvider, mas guarda o token (+username/
+// kind) em settings p/ listar os repositórios remotos da conta depois. O token
+// nunca volta p/ o cliente (ListConnections não devolve settings). kind: "token"|"oauth".
+func (d *DB) SetCodeProviderToken(ctx context.Context, orgID, provider, label, token, username, kind string) (string, error) {
+	id := NewID("con")
+	st, _ := json.Marshal(map[string]string{"token": token, "username": username, "kind": kind})
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type='code' AND provider=$2`, orgID, provider); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO connection(id,org_id,type,provider,label,status,settings)
+			VALUES($1,$2,'code',$3,$4,'ok',$5::jsonb)`, id, orgID, provider, label, string(st))
+		return e
+	})
+	return id, err
+}
+
+// GetCodeAuth devolve o token+username guardados da conexão de código do provider
+// (vazio se não houver — ex.: conexão antiga sem token, ou reaproveitada).
+func (d *DB) GetCodeAuth(ctx context.Context, orgID, provider string) (token, username string, err error) {
+	var st string
+	err = d.Pool.QueryRow(ctx, `SELECT COALESCE(settings::text,'{}') FROM connection
+		WHERE org_id=$1 AND type='code' AND provider=$2 ORDER BY created_at DESC LIMIT 1`, orgID, provider).Scan(&st)
+	if err != nil {
+		return "", "", err
+	}
+	var m map[string]string
+	_ = json.Unmarshal([]byte(st), &m)
+	return m["token"], m["username"], nil
+}
+
 // DeleteCodeProvider remove a conexão de código de um provider.
 func (d *DB) DeleteCodeProvider(ctx context.Context, orgID, provider string) error {
 	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
@@ -887,6 +918,31 @@ func (d *DB) CreateRepo(ctx context.Context, orgID, wspID, name, cloneURL, defau
 		}
 		_, e := tx.Exec(ctx, `INSERT INTO repository(id,org_id,workspace_id,name,provider,default_branch,connection_id,settings)
 			VALUES($1,$2,$3,$4,'github',$5,$6,$7::jsonb)`, repoID, orgID, wspID, name, defaultBranch, conID, settings)
+		return e
+	})
+	return repoID, err
+}
+
+// CreateRepoFrom registra um repositório escolhido a partir de uma fonte de
+// código já conectada (provider). Liga à connection de código existente (não
+// cria uma nova) e guarda clone_url + local_dir em settings.
+func (d *DB) CreateRepoFrom(ctx context.Context, orgID, wspID, name, cloneURL, defaultBranch, provider, localDir string) (string, error) {
+	repoID := NewID("repo")
+	if provider == "" {
+		provider = "github"
+	}
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	settings, _ := json.Marshal(map[string]string{"clone_url": cloneURL, "local_dir": localDir})
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var conID *string
+		var c string
+		if e := tx.QueryRow(ctx, `SELECT id FROM connection WHERE org_id=$1 AND type='code' AND provider=$2 ORDER BY created_at DESC LIMIT 1`, orgID, provider).Scan(&c); e == nil {
+			conID = &c
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO repository(id,org_id,workspace_id,name,provider,default_branch,connection_id,settings)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`, repoID, orgID, wspID, name, provider, defaultBranch, conID, string(settings))
 		return e
 	})
 	return repoID, err

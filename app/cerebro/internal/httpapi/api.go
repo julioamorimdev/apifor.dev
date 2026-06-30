@@ -125,6 +125,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/anthropic/test", a.anthropicTest) // POST valida API key
 	mux.HandleFunc("/v1/connections/git", a.gitConnect)               // POST conecta (valida+grava) / DELETE desconecta
 	mux.HandleFunc("/v1/connections/git/test", a.gitTest)             // POST valida token de código
+	mux.HandleFunc("/v1/connections/code/repos", a.codeRemoteRepos)   // GET lista repositórios remotos da conta conectada
 	mux.HandleFunc("/v1/connections/git/github/device", a.githubDeviceStart)  // POST inicia device-flow
 	mux.HandleFunc("/v1/connections/git/github/device/status", a.githubDeviceStatus) // GET status do device-flow
 	mux.HandleFunc("/v1/connections/tasks", a.tasksConnect)    // POST conecta fonte de tarefas / DELETE desconecta
@@ -566,6 +567,8 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 			Name          string `json:"name"`
 			CloneURL      string `json:"clone_url"`
 			DefaultBranch string `json:"default_branch"`
+			Provider      string `json:"provider"`
+			LocalDir      string `json:"local_dir"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" || in.CloneURL == "" {
 			writeJSON(w, 400, errBody("bad_request", "name e clone_url obrigatórios"))
@@ -578,7 +581,7 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 			in.DefaultBranch = "main"
 		}
 		org := a.orgFrom(r)
-		id, err := a.DB.CreateRepo(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Name, in.CloneURL, in.DefaultBranch)
+		id, err := a.DB.CreateRepoFrom(r.Context(), org, a.DB.FirstWorkspace(r.Context(), org), in.Name, in.CloneURL, in.DefaultBranch, in.Provider, strings.TrimSpace(in.LocalDir))
 		if err != nil {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
@@ -1163,13 +1166,140 @@ func (a *API) gitConnect(w http.ResponseWriter, r *http.Request) {
 	if in.Provider == "bitbucket" && in.Username != "" {
 		label = in.Username
 	}
-	id, err := a.DB.SetCodeProvider(r.Context(), org, in.Provider, label)
+	id, err := a.DB.SetCodeProviderToken(r.Context(), org, in.Provider, label, strings.TrimSpace(in.Token), strings.TrimSpace(in.Username), "token")
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
 	a.recordAudit(r, "connection.code.set", "connection", id)
 	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
+}
+
+// remoteRepo é um repositório remoto da conta conectada (p/ o seletor de "Adicionar repositório").
+type remoteRepo struct {
+	FullName      string `json:"full_name"`
+	CloneURL      string `json:"clone_url"`
+	DefaultBranch string `json:"default_branch"`
+	Private       bool   `json:"private"`
+}
+
+// listRemoteRepos chama a API do provider (com o token guardado) e devolve os
+// repositórios da conta. status != 200 sinaliza erro (msg explica).
+func (a *API) listRemoteRepos(ctx context.Context, provider, token, username string) ([]remoteRepo, int, string) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	get := func(url string, hdr map[string]string) ([]byte, int, string) {
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, 502, "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode != 200 {
+			return nil, resp.StatusCode, "o provider recusou a listagem de repositórios"
+		}
+		return body, 200, ""
+	}
+	switch provider {
+	case "github":
+		body, st, msg := get("https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member",
+			map[string]string{"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json", "User-Agent": "apifor.dev"})
+		if st != 200 {
+			return nil, st, msg
+		}
+		var arr []struct {
+			FullName string `json:"full_name"`
+			CloneURL string `json:"clone_url"`
+			Default  string `json:"default_branch"`
+			Private  bool   `json:"private"`
+		}
+		_ = json.Unmarshal(body, &arr)
+		out := make([]remoteRepo, 0, len(arr))
+		for _, x := range arr {
+			out = append(out, remoteRepo{x.FullName, x.CloneURL, x.Default, x.Private})
+		}
+		return out, 200, ""
+	case "gitlab":
+		body, st, msg := get("https://gitlab.com/api/v4/projects?membership=true&per_page=100&order_by=last_activity_at&simple=true",
+			map[string]string{"Authorization": "Bearer " + token})
+		if st != 200 {
+			return nil, st, msg
+		}
+		var arr []struct {
+			Path    string `json:"path_with_namespace"`
+			HTTPURL string `json:"http_url_to_repo"`
+			Default string `json:"default_branch"`
+			Vis     string `json:"visibility"`
+		}
+		_ = json.Unmarshal(body, &arr)
+		out := make([]remoteRepo, 0, len(arr))
+		for _, x := range arr {
+			out = append(out, remoteRepo{x.Path, x.HTTPURL, x.Default, x.Vis != "public"})
+		}
+		return out, 200, ""
+	case "bitbucket":
+		body, st, msg := get("https://api.bitbucket.org/2.0/repositories?role=member&pagelen=100&sort=-updated_on",
+			map[string]string{"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+token))})
+		if st != 200 {
+			return nil, st, msg
+		}
+		var wrap struct {
+			Values []struct {
+				FullName   string `json:"full_name"`
+				IsPrivate  bool   `json:"is_private"`
+				MainBranch struct {
+					Name string `json:"name"`
+				} `json:"mainbranch"`
+				Links struct {
+					Clone []struct {
+						Name string `json:"name"`
+						Href string `json:"href"`
+					} `json:"clone"`
+				} `json:"links"`
+			} `json:"values"`
+		}
+		_ = json.Unmarshal(body, &wrap)
+		out := make([]remoteRepo, 0, len(wrap.Values))
+		for _, x := range wrap.Values {
+			href := ""
+			for _, c := range x.Links.Clone {
+				if c.Name == "https" {
+					href = c.Href
+				}
+			}
+			out = append(out, remoteRepo{x.FullName, href, x.MainBranch.Name, x.IsPrivate})
+		}
+		return out, 200, ""
+	}
+	return nil, 400, "provider inválido"
+}
+
+// codeRemoteRepos: GET /v1/connections/code/repos?provider=X — lista os
+// repositórios da conta de código conectada (usa o token guardado no connect).
+func (a *API) codeRemoteRepos(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	if _, ok := providerLabels[provider]; !ok {
+		writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+		return
+	}
+	org := a.orgFrom(r)
+	token, username, err := a.DB.GetCodeAuth(r.Context(), org, provider)
+	if err != nil || token == "" {
+		writeJSON(w, 409, errBody("no_token", "reconecte esta fonte de código (em Conexões → Código) para listar os repositórios"))
+		return
+	}
+	repos, st, msg := a.listRemoteRepos(r.Context(), provider, token, username)
+	if st != 200 {
+		writeJSON(w, st, errBody("provider_error", msg))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"repos": repos})
 }
 
 // githubDeviceStart inicia o OAuth device-flow do GitHub (igual `gh auth
@@ -1271,7 +1401,7 @@ func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int, 
 				case "docs":
 					_, _ = a.DB.SetTypedConnection(context.Background(), org, "docs", "github_wiki", login)
 				default:
-					_, _ = a.DB.SetCodeProvider(context.Background(), org, "github", login)
+					_, _ = a.DB.SetCodeProviderToken(context.Background(), org, "github", login, tok.AccessToken, "", "oauth")
 				}
 				set("authorized", login, "")
 			} else {

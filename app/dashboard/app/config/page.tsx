@@ -35,6 +35,13 @@ const INT_META: Record<string, { title: string; ctype: "ci" | "observability" | 
   notion:              { title: "Notion",              ctype: "docs",          fields: ["token"],            tokenLabel: "Integration token",     help: "Notion → Settings → Integrations (internal integration token).", docs: "https://www.notion.so/my-integrations", iconPath: "M4 4h13l3 3v13H4zM8 8v8M8 8l8 8M16 8v8" },
 };
 
+// fontes de código (p/ o seletor de "Adicionar repositório").
+const CODE_PROVS: Record<string, { title: string; iconPath: string }> = {
+  github:    { title: "GitHub",    iconPath: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" },
+  gitlab:    { title: "GitLab",    iconPath: "M12 21l3.5-7H8.5L12 21zM12 21L3 10l1.5-5L8.5 14M12 21l9-11-1.5-5L15.5 14" },
+  bitbucket: { title: "Bitbucket", iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
+};
+
 // ─── shared styles ───────────────────────────────────────────────────
 const sCard: React.CSSProperties = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", overflow: "hidden" };
 const sCardHead = (extra?: React.CSSProperties): React.CSSProperties => ({ padding: "13px 18px", borderBottom: "1px solid var(--border)", fontSize: 13, fontWeight: 600, color: "var(--ink)", ...extra });
@@ -132,7 +139,17 @@ export default function Config() {
   const [poolRepoSearch, setPoolRepoSearch] = useState("");
 
   const [repoOpen, setRepoOpen] = useState(false);
-  const [r, setR]               = useState({ name: "", url: "file:///remotes/", branch: "main" });
+  // fluxo "Adicionar repositório": escolhe fonte conectada → escolhe repo remoto → diretório local → salva
+  type RemoteRepo = { full_name: string; clone_url: string; default_branch: string; private: boolean };
+  const [repoStep, setRepoStep]       = useState<"source" | "repo" | "dir">("source");
+  const [repoProv, setRepoProv]       = useState("");
+  const [repoList, setRepoList]       = useState<RemoteRepo[] | null>(null);
+  const [repoListErr, setRepoListErr] = useState("");
+  const [repoLoading, setRepoLoading] = useState(false);
+  const [repoSearch, setRepoSearch]   = useState("");
+  const [repoSel, setRepoSel]         = useState<RemoteRepo | null>(null);
+  const [repoDir, setRepoDir]         = useState("");
+  const [repoSaving, setRepoSaving]   = useState(false);
   const [pwOpen, setPwOpen]     = useState(false);
   const [pw, setPw]             = useState({ focus: "backend", repo_id: "", model: "claude_opus", concurrency: 1 });
   const [iaModal, setIaModal]   = useState<"subscription" | "api" | null>(null);
@@ -408,10 +425,42 @@ export default function Config() {
     setPool(next);
     await apiPost("/v1/pool", next);
   }
-  async function addRepo() {
-    if (!r.name.trim() || !r.url.trim()) return;
-    await apiPost("/v1/repos", { name: r.name, clone_url: r.url, default_branch: r.branch });
-    setRepoOpen(false); setR({ name: "", url: "file:///remotes/", branch: "main" }); reload();
+  function openRepoModal() {
+    setRepoStep("source"); setRepoProv(""); setRepoList(null); setRepoListErr("");
+    setRepoLoading(false); setRepoSearch(""); setRepoSel(null); setRepoDir(""); setRepoSaving(false);
+    setRepoOpen(true);
+  }
+  // fontes de código conectadas (github/gitlab/bitbucket) — base do passo 1
+  const codeConns = (conns || []).filter((c) => c.type === "code" && c.status === "ok");
+
+  async function pickRepoSource(provider: string) {
+    setRepoProv(provider); setRepoStep("repo"); setRepoList(null); setRepoListErr("");
+    setRepoSearch(""); setRepoLoading(true);
+    try {
+      const res = await apiGet<{ repos?: RemoteRepo[]; error?: { message?: string } }>(`/v1/connections/code/repos?provider=${provider}`);
+      if (res?.error) throw new Error(res.error.message || "falha ao listar repositórios");
+      setRepoList(res?.repos || []);
+    } catch (e) {
+      setRepoListErr(e instanceof Error ? e.message : "falha ao listar repositórios");
+    } finally { setRepoLoading(false); }
+  }
+  function pickRemoteRepo(x: RemoteRepo) {
+    setRepoSel(x);
+    const leaf = x.full_name.split("/").pop() || x.full_name;
+    setRepoDir(`~/apifor/${leaf}`);
+    setRepoStep("dir");
+  }
+  async function saveRepo() {
+    if (!repoSel) return;
+    setRepoSaving(true);
+    try {
+      const leaf = repoSel.full_name.split("/").pop() || repoSel.full_name;
+      await apiPost("/v1/repos", {
+        name: leaf, clone_url: repoSel.clone_url, default_branch: repoSel.default_branch || "main",
+        provider: repoProv, local_dir: repoDir.trim(),
+      });
+      setRepoOpen(false); reload();
+    } finally { setRepoSaving(false); }
   }
   async function addPinned() {
     await apiPost("/v1/pinned-workers", pw);
@@ -718,7 +767,7 @@ export default function Config() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>Repositórios disponíveis</span>
-            <button style={sFilledBtn} onClick={() => setRepoOpen(true)}>
+            <button style={sFilledBtn} onClick={openRepoModal}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
               Adicionar repositório
             </button>
@@ -1018,24 +1067,93 @@ export default function Config() {
       {/* ═══════════ MODALS ═══════════ */}
       {repoOpen && (
         <Modal title="Adicionar repositório" onClose={() => setRepoOpen(false)}
-          footer={<>
-            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => setRepoOpen(false)}>Cancelar</button>
-            <button style={btn} onClick={addRepo}>Registrar</button>
-          </>}>
-          <div style={{ display: "grid", gap: 12 }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Nome</span>
-              <input style={input} value={r.name} onChange={(e) => setR({ ...r, name: e.target.value })} placeholder="meu-repo" />
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Clone URL</span>
-              <input style={input} value={r.url} onChange={(e) => setR({ ...r, url: e.target.value })} placeholder="file:///remotes/… ou https://github.com/org/repo.git" />
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Branch padrão</span>
-              <input style={input} value={r.branch} onChange={(e) => setR({ ...r, branch: e.target.value })} placeholder="main" />
-            </label>
-          </div>
+          footer={
+            repoStep === "dir" ? <>
+              <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => setRepoStep("repo")}>Voltar</button>
+              <button style={{ ...btn, opacity: repoSaving || !repoDir.trim() ? .6 : 1, pointerEvents: repoSaving || !repoDir.trim() ? "none" : "auto" }} onClick={saveRepo}>{repoSaving ? "Salvando…" : "Salvar"}</button>
+            </> : repoStep === "repo" ? (
+              <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => setRepoStep("source")}>Voltar</button>
+            ) : (
+              <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => setRepoOpen(false)}>Cancelar</button>
+            )
+          }>
+          {/* passo 1 — escolher a fonte de código conectada */}
+          {repoStep === "source" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.5 }}>Escolha uma fonte de código conectada para puxar os repositórios da conta.</span>
+              {codeConns.length === 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "18px 14px", textAlign: "center", border: "1px dashed var(--border)", borderRadius: 11 }}>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)" }}>Nenhuma fonte de código conectada.</span>
+                  <button style={{ ...sFilledBtn, alignSelf: "center" }} onClick={() => { setRepoOpen(false); setTab("connections"); setConnTab("codigo"); }}>Conectar em Conexões → Código</button>
+                </div>
+              ) : codeConns.map((c) => {
+                const meta = CODE_PROVS[c.provider] || { title: c.provider, iconPath: "" };
+                return (
+                  <button key={c.id} onClick={() => pickRepoSource(c.provider)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 11, background: "var(--card)", cursor: "pointer", textAlign: "left" }}>
+                    <span style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 8, background: "var(--accent-tint)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={meta.iconPath}/></svg>
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{meta.title}</div>
+                      {c.label && <div style={{ fontSize: 11.5, color: "var(--mute)" }}>@{c.label}</div>}
+                    </div>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* passo 2 — escolher o repositório remoto */}
+          {repoStep === "repo" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "var(--mute)" }}>
+                <span style={{ fontWeight: 600, color: "var(--dim)" }}>{CODE_PROVS[repoProv]?.title || repoProv}</span>
+                <span>· escolha o repositório</span>
+              </div>
+              {repoLoading ? (
+                <div style={{ padding: "24px 0", textAlign: "center", color: "var(--mute)", fontSize: 12.5 }}>Carregando repositórios…</div>
+              ) : repoListErr ? (
+                <div style={{ padding: "16px 14px", textAlign: "center", color: "var(--red)", fontSize: 12.5 }}>{repoListErr}</div>
+              ) : (repoList || []).length === 0 ? (
+                <div style={{ padding: "20px 0", textAlign: "center", color: "var(--mute)", fontSize: 12.5 }}>Nenhum repositório nessa conta.</div>
+              ) : (
+                <>
+                  <input style={input} value={repoSearch} autoFocus onChange={(e) => setRepoSearch(e.target.value)} placeholder="Buscar repositório…" />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7, maxHeight: 320, overflowY: "auto" }}>
+                    {(repoList || []).filter((x) => x.full_name.toLowerCase().includes(repoSearch.trim().toLowerCase())).map((x) => (
+                      <button key={x.full_name} onClick={() => pickRemoteRepo(x)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--card)", cursor: "pointer", textAlign: "left" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.full_name}</div>
+                          <div style={{ fontSize: 11, color: "var(--mute)", fontFamily: "var(--mono)" }}>{x.default_branch || "main"}</div>
+                        </div>
+                        {x.private && <span style={{ fontSize: 10, fontWeight: 600, color: "var(--dim)", background: "var(--elev)", border: "1px solid var(--border)", borderRadius: 5, padding: "1px 6px" }}>privado</span>}
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* passo 3 — diretório local + salvar */}
+          {repoStep === "dir" && repoSel && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 13px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--elev)" }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d={CODE_PROVS[repoProv]?.iconPath || ""}/></svg>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repoSel.full_name}</div>
+                  <div style={{ fontSize: 11, color: "var(--mute)", fontFamily: "var(--mono)" }}>branch {repoSel.default_branch || "main"}</div>
+                </div>
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Diretório local para clonar</span>
+                <input style={input} value={repoDir} autoFocus onChange={(e) => setRepoDir(e.target.value)} placeholder="~/apifor/meu-repo" />
+                <span style={{ fontSize: 11, color: "var(--mute)" }}>Caminho na máquina onde o repositório será clonado.</span>
+              </label>
+            </div>
+          )}
         </Modal>
       )}
 
