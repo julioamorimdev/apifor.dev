@@ -179,6 +179,55 @@ export function Portal({ children }: { children: React.ReactNode }) {
   return createPortal(children, document.body);
 }
 
+// ── Toast (notificações inline no canto superior direito) ──────────────────
+type ToastItem = { id: number; msg: string; type: "success" | "error" | "info" };
+let _toastSeq = 0;
+export function toast(msg: string, type: "success" | "error" | "info" = "success") {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("apifor-toast", { detail: { id: ++_toastSeq, msg, type } }));
+}
+
+function ToastContainer() {
+  const [items, setItems] = useState<ToastItem[]>([]);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const t = (e as CustomEvent<ToastItem>).detail;
+      setItems((ts) => [...ts, t]);
+      setTimeout(() => setItems((ts) => ts.filter((x) => x.id !== t.id)), 3500);
+    };
+    window.addEventListener("apifor-toast", handler);
+    return () => window.removeEventListener("apifor-toast", handler);
+  }, []);
+  if (!items.length) return null;
+  const COLOR: Record<string, [string, string]> = {
+    success: ["var(--green)", "var(--green-tint)"],
+    error:   ["var(--red)",   "var(--red-tint)"],
+    info:    ["var(--accent)","var(--accent-tint)"],
+  };
+  const ICON: Record<string, string> = { success: "✓", error: "✕", info: "i" };
+  return (
+    <Portal>
+      <div style={{ position: "fixed", top: 20, right: 20, zIndex: 999, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
+        {items.map((t) => {
+          const [fg, bg] = COLOR[t.type] || COLOR.info;
+          return (
+            <div key={t.id} className="apf-rise"
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", borderRadius: 10,
+                boxShadow: "var(--shadow-pop)", border: `1px solid ${bg}`, background: "var(--card)", fontSize: 13.5, fontWeight: 500,
+                minWidth: 220, maxWidth: 380, pointerEvents: "auto" }}>
+              <span style={{ width: 22, height: 22, borderRadius: "50%", background: bg, color: fg,
+                display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12, flexShrink: 0 }}>
+                {ICON[t.type]}
+              </span>
+              <span style={{ color: "var(--ink)" }}>{t.msg}</span>
+            </div>
+          );
+        })}
+      </div>
+    </Portal>
+  );
+}
+
 // modal reutilizável (overlay + fadein/rise + Esc/backdrop p/ fechar)
 export function Modal({ title, onClose, children, footer, width = 520 }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; width?: number }) {
   const [lang] = useLang();
@@ -443,20 +492,32 @@ function CommandPalette() {
 function WorkspaceMenu({ lang }: { lang: string }) {
   const [open, setOpen]           = useState(false);
   const [wsps, setWsps]           = useState<{ id: string; name: string; initial: string }[]>([]);
+  const [curId, setCurId]         = useState<string>(() => { try { return localStorage.getItem("apifor_wsp") || ""; } catch { return ""; } });
   const [role, setRole]           = useState("");
   const [wspModal, setWspModal]   = useState(false);
   const [wspName, setWspName]     = useState("");
   const [wspSaving, setWspSaving] = useState(false);
   const menuRef                   = useRef<HTMLDivElement>(null);
-  const cur = wsps[0];
+  const cur = wsps.find((w) => w.id === curId) || wsps[0];
 
   const load = useCallback(() => {
-    apiGet<{ data: any[] }>("/v1/workspaces").then((r) => setWsps(r?.data || [])).catch(() => {});
+    apiGet<{ data: any[] }>("/v1/workspaces").then((r) => {
+      const list = r?.data || [];
+      setWsps(list);
+      // Selecionar primeiro workspace se nenhum estiver salvo
+      setCurId((prev) => {
+        if (!prev && list.length > 0) {
+          try { localStorage.setItem("apifor_wsp", list[0].id); } catch {}
+          return list[0].id;
+        }
+        return prev;
+      });
+    }).catch(() => {});
     apiGet<{ role: string }>("/v1/me").then((r) => setRole(r?.role || "")).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  // close on outside click — avoids z-index conflict with sticky aside stacking context
+  // close on outside click
   useEffect(() => {
     if (!open) return;
     function handle(e: MouseEvent) {
@@ -466,13 +527,35 @@ function WorkspaceMenu({ lang }: { lang: string }) {
     return () => document.removeEventListener("mousedown", handle);
   }, [open]);
 
+  function switchWsp(id: string) {
+    try { localStorage.setItem("apifor_wsp", id); } catch {}
+    setCurId(id);
+    setOpen(false);
+    window.location.reload();
+  }
+
   function openModal() { setOpen(false); setWspName(""); setWspModal(true); }
 
   async function createWsp() {
     if (!wspName.trim()) return;
     setWspSaving(true);
-    try { await apiPost("/v1/workspaces", { name: wspName.trim() }); load(); setWspModal(false); }
-    finally { setWspSaving(false); }
+    try {
+      const r = await apiPost<{ id?: string; error?: { message: string } }>("/v1/workspaces", { name: wspName.trim() });
+      if (r?.id) {
+        try { localStorage.setItem("apifor_wsp", r.id); } catch {}
+        setCurId(r.id);
+        toast(lang === "en" ? "Workspace created!" : "Workspace criado com sucesso!", "success");
+        setWspModal(false);
+        await load();
+        window.location.reload();
+      } else {
+        toast(r?.error?.message || (lang === "en" ? "Failed to create workspace" : "Erro ao criar workspace"), "error");
+      }
+    } catch {
+      toast(lang === "en" ? "Failed to create workspace" : "Erro ao criar workspace", "error");
+    } finally {
+      setWspSaving(false);
+    }
   }
 
   return (
@@ -487,11 +570,13 @@ function WorkspaceMenu({ lang }: { lang: string }) {
         {open && (
           <div className="apf-fadein" style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, zIndex: 20, boxShadow: "var(--shadow-pop)" }}>
             {wsps.map((w) => (
-              <a key={w.id} className="apf-link" href="/" onClick={() => { try { localStorage.setItem("apifor_wsp", w.id); } catch {} }}
-                style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, fontSize: 13 }}>
-                <span style={{ width: 18, height: 18, borderRadius: 5, background: "var(--accent-tint)", color: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 10 }}>{w.initial}</span>
+              <div key={w.id} className="apf-link" onClick={() => switchWsp(w.id)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 9px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                  background: w.id === curId ? "var(--accent-tint)" : "transparent", color: w.id === curId ? "var(--accent)" : "var(--ink)" }}>
+                <span style={{ width: 18, height: 18, borderRadius: 5, background: w.id === curId ? "var(--accent)" : "var(--accent-tint)", color: w.id === curId ? "var(--accent-ink)" : "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 10 }}>{w.initial}</span>
                 {w.name}
-              </a>
+                {w.id === curId && <span style={{ marginLeft: "auto", fontSize: 11 }}>✓</span>}
+              </div>
             ))}
             <div onClick={openModal} className="apf-link" style={{ padding: "7px 9px", borderRadius: 8, fontSize: 13, color: "var(--accent)", cursor: "pointer", borderTop: "1px solid var(--border)", marginTop: 4 }}>+ {t(lang, "newWsp")}</div>
           </div>
@@ -504,17 +589,17 @@ function WorkspaceMenu({ lang }: { lang: string }) {
             <button onClick={() => setWspModal(false)} style={{ height: 34, padding: "0 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
             <button onClick={createWsp} disabled={wspSaving || !wspName.trim()}
               style={{ height: 34, padding: "0 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "var(--accent-ink)", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: (wspSaving || !wspName.trim()) ? .5 : 1 }}>
-              {wspSaving ? "Criando…" : "Criar"}
+              {wspSaving ? (lang === "en" ? "Creating…" : "Criando…") : (lang === "en" ? "Create" : "Criar")}
             </button>
           </>}>
           <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <span style={{ fontSize: 11.5, color: "var(--dim)" }}>Nome do workspace</span>
+            <span style={{ fontSize: 11.5, color: "var(--dim)" }}>{lang === "en" ? "Workspace name" : "Nome do workspace"}</span>
             <input
               autoFocus
               value={wspName}
               onChange={(e) => setWspName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") createWsp(); }}
-              placeholder="ex: Produção"
+              placeholder={lang === "en" ? "e.g. Production" : "ex: Produção"}
               style={{ height: 38, padding: "0 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 13, outline: "none", fontFamily: "inherit" }}
             />
           </label>
@@ -827,7 +912,12 @@ export const setToken = (tk: string | null) => {
 };
 function authHeaders(): Record<string, string> {
   const tk = getToken();
-  return tk ? { Authorization: "Bearer " + tk } : {};
+  const h: Record<string, string> = tk ? { Authorization: "Bearer " + tk } : {};
+  try {
+    const wsp = typeof window !== "undefined" ? localStorage.getItem("apifor_wsp") : null;
+    if (wsp) h["X-Workspace-ID"] = wsp;
+  } catch {}
+  return h;
 }
 
 // ───────────────────────── data fetching ─────────────────────────
@@ -837,6 +927,13 @@ export const sseURL = (p: string) => API_BASE + p;
 
 // parse tolerante: nunca quebra com corpo vazio/não-JSON (ex.: 429/204)
 async function safeJson<T>(r: Response): Promise<T> {
+  if (r.status === 401) {
+    setToken(null);
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.replace("/login");
+    }
+    return {} as T;
+  }
   const t = await r.text();
   try { return (t ? JSON.parse(t) : {}) as T; } catch { return {} as T; }
 }
@@ -896,6 +993,21 @@ function PageSkeleton() {
 }
 
 export function Page({ children, loading }: { children: React.ReactNode; loading?: boolean }) {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!getToken()) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.replace(`/login?next=${next}`);
+      return;
+    }
+    // Superadmin não usa o orquestrador — vai pro console da plataforma.
+    apiGet<{ role?: string }>("/v1/me")
+      .then((r) => { if (r?.role === "superadmin") window.location.replace("/superadmin"); else setAuthed(true); })
+      .catch(() => setAuthed(true));
+  }, []);
+
+  if (!authed) return null;
+
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       <Sidebar />
@@ -907,6 +1019,7 @@ export function Page({ children, loading }: { children: React.ReactNode; loading
         </main>
       </div>
       <CommandPalette />
+      <ToastContainer />
     </div>
   );
 }

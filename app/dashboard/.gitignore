@@ -1,3 +1,6 @@
 
 # static export (Tauri) — gerado
 /out/
+
+# build cache do TS
+*.tsbuildinfo
