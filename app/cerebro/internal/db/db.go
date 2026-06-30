@@ -396,6 +396,29 @@ func (d *DB) DeleteTaskSource(ctx context.Context, orgID, provider string) error
 	})
 }
 
+// SetTypedConnection registra/atualiza uma conexão de um tipo (ci,
+// observability, …). Um por (tipo, provider). ctype é validado pelo caller.
+func (d *DB) SetTypedConnection(ctx context.Context, orgID, ctype, provider, label string) (string, error) {
+	id := NewID("con")
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type=$2::connection_type AND provider=$3`, orgID, ctype, provider); e != nil {
+			return e
+		}
+		_, e := tx.Exec(ctx, `INSERT INTO connection(id,org_id,type,provider,label,status,settings)
+			VALUES($1,$2,$3::connection_type,$4,$5,'ok','{}'::jsonb)`, id, orgID, ctype, provider, label)
+		return e
+	})
+	return id, err
+}
+
+// DeleteTypedConnection remove a conexão (tipo, provider).
+func (d *DB) DeleteTypedConnection(ctx context.Context, orgID, ctype, provider string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type=$2::connection_type AND provider=$3`, orgID, ctype, provider)
+		return e
+	})
+}
+
 // GetOrgPlan devolve o plano da org (p/ rate limit por plano).
 func (d *DB) GetOrgPlan(ctx context.Context, orgID string) string {
 	var p string

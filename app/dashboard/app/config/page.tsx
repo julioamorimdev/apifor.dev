@@ -20,6 +20,17 @@ const AGENTS = [
 ];
 const FOCOS = ["Features e correções", "Apenas segurança", "Documentação", "Testes", "Tudo"];
 
+// CI remoto + Observabilidade: config de cada provider (campos + ajuda).
+type IntField = "token" | "username" | "project";
+const INT_META: Record<string, { title: string; ctype: "ci" | "observability"; fields: IntField[]; tokenLabel: string; help: string; docs: string; noTest?: boolean; iconPath: string }> = {
+  cypress:             { title: "Cypress Cloud",       ctype: "ci",            fields: ["project", "token"], tokenLabel: "Record key",           help: "Cypress Cloud → Project Settings → Record Keys.",      docs: "https://cloud.cypress.io",                       noTest: true, iconPath: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM8 9c-1.5 0-2.5 1.3-2.5 3s1 3 2.5 3c1 0 1.7-.5 2-1.3M16 8.7c-.4-.5-1-.7-1.7-.7-1.5 0-2.5 1.3-2.5 3s1 3 2.5 3l-1.3 3" },
+  github_actions:      { title: "GitHub Actions",      ctype: "ci",            fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitHub com escopo repo + workflow.",            docs: "https://github.com/settings/tokens",             iconPath: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" },
+  gitlab_ci:           { title: "GitLab CI",           ctype: "ci",            fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitLab com escopos api e read_api.",            docs: "https://gitlab.com/-/user_settings/personal_access_tokens", iconPath: "M12 21l3.5-7H8.5L12 21zM12 21L3 10l1.5-5L8.5 14M12 21l9-11-1.5-5L15.5 14" },
+  bitbucket_pipelines: { title: "Bitbucket Pipelines", ctype: "ci",            fields: ["username", "token"], tokenLabel: "App password",          help: "Usuário + app password com escopo pipeline.",         docs: "https://bitbucket.org/account/settings/app-passwords/", iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
+  sonarcloud:          { title: "SonarCloud",          ctype: "observability", fields: ["token"],            tokenLabel: "Token",                 help: "SonarCloud → My Account → Security → Generate Token.", docs: "https://sonarcloud.io/account/security",          iconPath: "M5 18c0-7 4-11 11-11M8 18c0-5 2.5-8 8-8M11 18c0-3 1.5-5 5-5" },
+  sentry:              { title: "Sentry",              ctype: "observability", fields: ["token"],            tokenLabel: "Auth token",            help: "Sentry → Settings → Auth Tokens (org).",              docs: "https://sentry.io/settings/account/api/auth-tokens/", iconPath: "M12 3l9 16H3l9-16zM12 9l4.5 8M12 9l-4.5 8" },
+};
+
 // ─── shared styles ───────────────────────────────────────────────────
 const sCard: React.CSSProperties = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", overflow: "hidden" };
 const sCardHead = (extra?: React.CSSProperties): React.CSSProperties => ({ padding: "13px 18px", borderBottom: "1px solid var(--border)", fontSize: 13, fontWeight: 600, color: "var(--ink)", ...extra });
@@ -308,6 +319,47 @@ export default function Config() {
 
   async function disconnectTask(provider: string) {
     await apiDelete(`/v1/connections/tasks?provider=${provider}`);
+    reloadConns();
+  }
+
+  // ── CI remoto + observabilidade ──
+  const [intModal, setIntModal] = useState<string | null>(null); // provider key
+  const [intF, setIntF] = useState({ token: "", username: "", project: "" });
+  const [intBusy, setIntBusy] = useState(false);
+  const [intTesting, setIntTesting] = useState(false);
+  const [intTest, setIntTest] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  function resetInt() {
+    setIntModal(null); setIntF({ token: "", username: "", project: "" });
+    setIntBusy(false); setIntTesting(false); setIntTest(null);
+  }
+  function intReady(provider: string) {
+    const m = INT_META[provider]; if (!m) return false;
+    return m.fields.every((f) => (intF as any)[f]?.trim());
+  }
+  async function testInt() {
+    if (!intModal) return;
+    setIntTesting(true); setIntTest(null);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/integration/test", { provider: intModal, ...intF });
+      setIntTest({ ok: !!r?.ok, msg: r?.message || (r?.ok ? "válido" : "inválido") });
+    } catch (e) {
+      setIntTest({ ok: false, msg: e instanceof Error ? e.message : "falha no teste" });
+    } finally { setIntTesting(false); }
+  }
+  async function connectInt() {
+    if (!intModal) return;
+    setIntBusy(true);
+    try {
+      const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/integration", { provider: intModal, ...intF });
+      if (!r?.ok) { setIntTest({ ok: false, msg: r?.message || "falha ao conectar" }); return; }
+      reloadConns(); resetInt();
+    } catch (e) {
+      setIntTest({ ok: false, msg: e instanceof Error ? e.message : "falha ao conectar" });
+    } finally { setIntBusy(false); }
+  }
+  async function disconnectInt(provider: string) {
+    await apiDelete(`/v1/connections/integration?provider=${provider}`);
     reloadConns();
   }
 
@@ -806,6 +858,42 @@ export default function Config() {
               })}
               <InfoNote>De onde vêm as tarefas dos workers. GitHub aceita OAuth ou token; os demais por token/API. Credenciais validadas na hora.</InfoNote>
             </div>
+          ) : (connTab === "ci" || connTab === "observ") ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {(connTab === "ci"
+                ? ["cypress", "github_actions", "gitlab_ci", "bitbucket_pipelines"]
+                : ["sonarcloud", "sentry"]
+              ).map((key) => {
+                const m = INT_META[key];
+                const c = (conns || []).find((x) => x.type === m.ctype && x.provider === key);
+                const active = !!c;
+                return (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 16, padding: "18px 20px", background: "var(--card)", border: active ? "1px solid var(--green)" : "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", flexWrap: "wrap" }}>
+                    <div style={{ width: 42, height: 42, flexShrink: 0, borderRadius: 11, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={m.iconPath}/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{m.title}</span>
+                        {active && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: "var(--green)", background: "rgba(63,185,80,.12)", border: "1px solid rgba(63,185,80,.4)", borderRadius: 5, padding: "1px 7px" }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4 10-10"/></svg>{c?.label || "Conectado"}</span>}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "var(--mute)", marginTop: 3 }}>{m.help}</div>
+                    </div>
+                    {active ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button style={{ ...sFilledBtn, background: "transparent", color: "var(--ink)", border: "1px solid var(--border)" }} onClick={() => { resetInt(); setIntModal(key); }}>Reconectar</button>
+                        <button title="Desconectar" style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 8, border: "1px solid rgba(248,81,73,.4)", background: "var(--red-tint)", color: "var(--red)", cursor: "pointer" }} onClick={() => disconnectInt(key)}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <button style={sFilledBtn} onClick={() => { resetInt(); setIntModal(key); }}>Conectar</button>
+                    )}
+                  </div>
+                );
+              })}
+              <InfoNote>{connTab === "ci" ? "CI remoto: dispara e lê pipelines/testes. Credenciais validadas na hora." : "Observabilidade: erros e qualidade de código. Tokens validados contra a API."}</InfoNote>
+            </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
               {(conns || []).map((c) => (
@@ -1126,6 +1214,46 @@ export default function Config() {
                 )}
               </div>
             </>)}
+          </div>
+        </Modal>
+        );
+      })()}
+
+      {intModal && (() => {
+        const m = INT_META[intModal];
+        const ready = intReady(intModal);
+        const fieldLabels: Record<IntField, string> = { token: m.tokenLabel, username: "Usuário", project: "Project ID" };
+        const placeholders: Record<IntField, string> = { token: "cole aqui", username: "seu_usuario", project: "ex: abc123" };
+        return (
+        <Modal title={`Conectar ${m.title}`} onClose={resetInt}
+          footer={<>
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetInt}>Cancelar</button>
+            <button style={{ ...btn, opacity: intBusy || !ready ? .6 : 1, pointerEvents: intBusy || !ready ? "none" : "auto" }} onClick={connectInt}>{intBusy ? "Conectando…" : "Conectar"}</button>
+          </>}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {m.fields.filter((f) => f !== "token").map((f) => (
+              <div key={f} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>{fieldLabels[f]}</span>
+                <input style={input} value={(intF as any)[f]} onChange={(e) => { setIntF({ ...intF, [f]: e.target.value }); setIntTest(null); }} placeholder={placeholders[f]} />
+              </div>
+            ))}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>{m.tokenLabel}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={{ ...input, flex: 1 }} type="password" value={intF.token} onChange={(e) => { setIntF({ ...intF, token: e.target.value }); setIntTest(null); }} placeholder="cole aqui" />
+                {!m.noTest && <button style={{ height: 38, padding: "0 14px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer", opacity: intTesting || !ready ? .6 : 1, pointerEvents: intTesting || !ready ? "none" : "auto" }} onClick={testInt}>{intTesting ? "Testando…" : "Testar"}</button>}
+              </div>
+              {intTest && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: intTest.ok ? "var(--green)" : "var(--red)", marginTop: 2 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">{intTest.ok ? <path d="M5 12l4 4 10-10"/> : <><path d="M18 6L6 18"/><path d="M6 6l12 12"/></>}</svg>
+                  {intTest.msg}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "14px 16px", background: "var(--accent-tint)", border: "1px solid rgba(245,166,35,.25)", borderRadius: 10 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+              <span style={{ fontSize: 12, color: "var(--mute)", lineHeight: 1.5 }}>{m.help} <a href={m.docs} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>Abrir →</a>{m.noTest ? " A record key do Cypress não é validada online." : ""}</span>
+            </div>
           </div>
         </Modal>
         );

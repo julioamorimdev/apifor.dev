@@ -129,6 +129,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/git/github/device/status", a.githubDeviceStatus) // GET status do device-flow
 	mux.HandleFunc("/v1/connections/tasks", a.tasksConnect)    // POST conecta fonte de tarefas / DELETE desconecta
 	mux.HandleFunc("/v1/connections/tasks/test", a.tasksTest)  // POST valida credencial da fonte de tarefas
+	mux.HandleFunc("/v1/connections/integration", a.integrationConnect)     // POST conecta CI/observabilidade / DELETE
+	mux.HandleFunc("/v1/connections/integration/test", a.integrationTest)   // POST valida credencial CI/observabilidade
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -1449,6 +1451,161 @@ func (a *API) tasksConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.recordAudit(r, "connection.tasks.set", "connection", id)
+	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
+}
+
+// intProviderType: provider de CI/observabilidade -> tipo de conexão.
+var intProviderType = map[string]string{
+	"cypress": "ci", "github_actions": "ci", "gitlab_ci": "ci", "bitbucket_pipelines": "ci",
+	"sonarcloud": "observability", "sentry": "observability",
+}
+var intProviderLabel = map[string]string{
+	"cypress": "Cypress Cloud", "github_actions": "GitHub Actions", "gitlab_ci": "GitLab CI",
+	"bitbucket_pipelines": "Bitbucket Pipelines", "sonarcloud": "SonarCloud", "sentry": "Sentry",
+}
+
+type intBody struct {
+	Provider string `json:"provider"`
+	Token    string `json:"token"`
+	Username string `json:"username"` // bitbucket pipelines
+	Project  string `json:"project"`  // cypress (project id)
+}
+
+// validateIntegration valida a credencial de CI/observabilidade.
+func (a *API) validateIntegration(ctx context.Context, in intBody) (ok bool, who string, msg string) {
+	tok := strings.TrimSpace(in.Token)
+	switch in.Provider {
+	case "github_actions":
+		o, w2, _, m := a.validateGitToken(ctx, "github", tok, "")
+		return o, w2, m
+	case "gitlab_ci":
+		o, w2, _, m := a.validateGitToken(ctx, "gitlab", tok, "")
+		return o, w2, m
+	case "bitbucket_pipelines":
+		o, w2, _, m := a.validateGitToken(ctx, "bitbucket", tok, strings.TrimSpace(in.Username))
+		return o, w2, m
+	case "cypress":
+		// Cypress Cloud não tem endpoint público simples de validação de
+		// record key; exigimos record key + project id e registramos.
+		if tok == "" || strings.TrimSpace(in.Project) == "" {
+			return false, "", "Cypress exige record key + project id"
+		}
+		return true, "project " + strings.TrimSpace(in.Project), "registrado (record key não é validada online)"
+	case "sonarcloud":
+		if tok == "" {
+			return false, "", "token vazio"
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://sonarcloud.io/api/authentication/validate", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return false, "", "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return false, "", "token SonarCloud inválido (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+		}
+		var v struct {
+			Valid bool `json:"valid"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&v)
+		if !v.Valid {
+			return false, "", "token SonarCloud inválido"
+		}
+		return true, "SonarCloud", "token válido"
+	case "sentry":
+		if tok == "" {
+			return false, "", "token vazio"
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://sentry.io/api/0/organizations/", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return false, "", "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return false, "", "token Sentry inválido (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+		}
+		var orgs []struct {
+			Slug string `json:"slug"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&orgs)
+		who = "Sentry"
+		if len(orgs) > 0 && orgs[0].Slug != "" {
+			who = orgs[0].Slug
+		}
+		return true, who, "conectado (" + who + ")"
+	}
+	return false, "", "provider inválido"
+}
+
+// integrationTest valida a credencial de CI/observabilidade sem gravar.
+func (a *API) integrationTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var in intBody
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if _, ok := intProviderType[in.Provider]; !ok {
+		writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+		return
+	}
+	ok, who, msg := a.validateIntegration(r.Context(), in)
+	writeJSON(w, 200, map[string]any{"ok": ok, "who": who, "message": msg})
+}
+
+// integrationConnect: POST valida + grava CI/observabilidade; DELETE desconecta.
+func (a *API) integrationConnect(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	org := a.orgFrom(r)
+	if r.Method == http.MethodDelete {
+		prov := strings.TrimSpace(r.URL.Query().Get("provider"))
+		ctype, ok := intProviderType[prov]
+		if !ok {
+			writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+			return
+		}
+		if err := a.DB.DeleteTypedConnection(r.Context(), org, ctype, prov); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "connection."+ctype+".delete", "connection", prov)
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST/DELETE"))
+		return
+	}
+	var in intBody
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	ctype, ok := intProviderType[in.Provider]
+	if !ok {
+		writeJSON(w, 400, errBody("bad_request", "provider inválido"))
+		return
+	}
+	valid, who, msg := a.validateIntegration(r.Context(), in)
+	if !valid {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": msg})
+		return
+	}
+	label := who
+	if label == "" {
+		label = intProviderLabel[in.Provider]
+	}
+	id, err := a.DB.SetTypedConnection(r.Context(), org, ctype, in.Provider, label)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	a.recordAudit(r, "connection."+ctype+".set", "connection", id)
 	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
 }
 
