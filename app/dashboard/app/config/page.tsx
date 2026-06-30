@@ -101,7 +101,7 @@ function accentTile(name: string): React.CSSProperties {
 export default function Config() {
   const { data: repos, reload }                = usePoll<Repo[]>("/v1/repos", 4000);
   const { data: secrets }                      = usePoll<Secret[]>("/v1/secrets", 4000);
-  const { data: conns }                        = usePoll<Conn[]>("/v1/connections", 5000);
+  const { data: conns, reload: reloadConns }   = usePoll<Conn[]>("/v1/connections", 5000);
   const { data: pinned, reload: reloadPinned } = usePoll<PinnedW[]>("/v1/pinned-workers", 4000);
   const [loading, setLoading] = useState(true);
   useEffect(() => { if (repos !== undefined) setLoading(false); }, [repos]);
@@ -118,6 +118,53 @@ export default function Config() {
   const [r, setR]               = useState({ name: "", url: "file:///remotes/", branch: "main" });
   const [pwOpen, setPwOpen]     = useState(false);
   const [pw, setPw]             = useState({ focus: "backend", repo_id: "", model: "claude_opus", concurrency: 1 });
+  const [iaModal, setIaModal]   = useState<"subscription" | "api" | null>(null);
+  const [iaApiKey, setIaApiKey] = useState("");
+  const [iaBusy, setIaBusy]     = useState(false);
+  // fluxo OAuth assinatura: idle → aguardando código colado
+  const [iaStep, setIaStep]     = useState<"idle" | "await_code">("idle");
+  const [iaUrl, setIaUrl]       = useState("");
+  const [iaCode, setIaCode]     = useState("");
+  const [iaErr, setIaErr]       = useState("");
+
+  function resetIA() {
+    setIaModal(null); setIaApiKey(""); setIaStep("idle");
+    setIaUrl(""); setIaCode(""); setIaErr(""); setIaBusy(false);
+  }
+
+  // assinatura: inicia o `claude setup-token`, abre a URL de autorização e
+  // pede o código de volta (PKCE — o backend dirige o CLI real).
+  async function claudeStart() {
+    setIaBusy(true); setIaErr("");
+    try {
+      const r = await apiPost<{ url?: string; error?: { message?: string } }>("/v1/connections/claude/start", {});
+      if (!r?.url) throw new Error(r?.error?.message || "falha ao iniciar autorização");
+      setIaUrl(r.url); setIaStep("await_code");
+      window.open(r.url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setIaErr(e instanceof Error ? e.message : "falha ao iniciar autorização");
+    } finally { setIaBusy(false); }
+  }
+
+  async function claudeSubmitCode() {
+    if (!iaCode.trim()) return;
+    setIaBusy(true); setIaErr("");
+    try {
+      const r = await apiPost<{ ok?: boolean; error?: { message?: string } }>("/v1/connections/claude/code", { code: iaCode.trim() });
+      if (!r?.ok) throw new Error(r?.error?.message || "código rejeitado");
+      reloadConns(); resetIA();
+    } catch (e) {
+      setIaErr(e instanceof Error ? e.message : "código rejeitado");
+    } finally { setIaBusy(false); }
+  }
+
+  async function connectApiKey() {
+    setIaBusy(true);
+    try {
+      await apiPost("/v1/connections", { kind: "api" });
+      reloadConns(); resetIA();
+    } finally { setIaBusy(false); }
+  }
 
   const loadPool = useCallback(() => {
     apiGet<Pool>("/v1/pool").then((x) => { if (!(x as any)?.error) setPool(x); }).catch(() => {});
@@ -150,10 +197,6 @@ export default function Config() {
     <Page loading={loading}>
       <PageHead eyebrow="Sistema" title="Configuração"
         subtitle="Ajustes do pipeline — workers, modelos, merge, limites, conexões e segredos."
-        right={tab === "repos" ? <button style={sFilledBtn} onClick={() => setRepoOpen(true)}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-          Adicionar repositório
-        </button> : undefined}
       />
 
       {/* ── tab bar ── */}
@@ -505,27 +548,68 @@ export default function Config() {
             ))}
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-            {(conns || []).map((c) => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 12, background: "var(--card)", boxShadow: "var(--shadow)", flexWrap: "wrap" }}>
-                <div style={accentTile(c.provider)}>{c.provider.charAt(0).toUpperCase()}</div>
-                <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: 2 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                    <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{c.provider}</span>
-                    <span style={badge(c.status === "ok" ? "open" : c.status === "needs_setup" ? "queued" : "failed")}>{c.status}</span>
+          {connTab === "ia" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {([
+                {
+                  key: "subscription" as const,
+                  title: "Assinatura Claude",
+                  sub: "Use sua conta Claude.ai — nenhuma API key necessária.",
+                  badge: "Recomendado",
+                  iconPath: "M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z",
+                },
+                {
+                  key: "api" as const,
+                  title: "API Anthropic",
+                  sub: "Conecte via API key — controle total de modelos e limites de uso.",
+                  badge: null,
+                  iconPath: "M8 9l-3 3 3 3M16 9l3 3-3 3",
+                },
+              ]).map(({ key, title, sub, badge: b, iconPath }) => {
+                const iaConn = (conns || []).find((c) => c.type === "ai_engine");
+                const active = !!iaConn && (key === "subscription" ? /assinatura/i.test(iaConn.provider) : /api/i.test(iaConn.provider));
+                return (
+                <div key={key} style={{ display: "flex", alignItems: "center", gap: 16, padding: "18px 20px", background: "var(--card)", border: active ? "1px solid var(--green)" : "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow)", flexWrap: "wrap" }}>
+                  <div style={{ width: 42, height: 42, flexShrink: 0, borderRadius: 11, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={iconPath}/></svg>
                   </div>
-                  <div style={{ fontSize: 11.5, color: "var(--mute)" }}>{c.type}{c.label ? ` · ${c.label}` : ""}</div>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{title}</span>
+                      {active
+                        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: "var(--green)", background: "rgba(63,185,80,.12)", border: "1px solid rgba(63,185,80,.4)", borderRadius: 5, padding: "1px 7px" }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l4 4 10-10"/></svg>Conectado</span>
+                        : b && <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--accent)", background: "var(--accent-tint)", border: "1px solid var(--accent)", borderRadius: 5, padding: "1px 7px" }}>{b}</span>}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "var(--mute)", marginTop: 3 }}>{sub}</div>
+                  </div>
+                  <button style={active ? { ...sFilledBtn, background: "transparent", color: "var(--ink)", border: "1px solid var(--border)" } : sFilledBtn} onClick={() => { setIaStep("idle"); setIaUrl(""); setIaCode(""); setIaErr(""); setIaModal(key); }}>{active ? "Reconectar" : "Conectar"}</button>
                 </div>
-                <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--mute)" }}>{c.created}</span>
-              </div>
-            ))}
-            {!(conns || []).length && (
-              <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--mute)", fontSize: 13 }}>
-                nenhuma conexão — registre um repositório para criar uma.
-              </div>
-            )}
-          </div>
-          <InfoNote>As conexões alimentam Tarefas, Pull Requests e CI. No Motor de IA você escolhe usar via API key ou conta de assinatura. Os tokens ficam em Segredos.</InfoNote>
+              );})}
+              <InfoNote>Escolha um método para o motor de IA processar tarefas. Assinatura usa sua conta Claude.ai; API usa chave própria faturada por token.</InfoNote>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+              {(conns || []).map((c) => (
+                <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 12, background: "var(--card)", boxShadow: "var(--shadow)", flexWrap: "wrap" }}>
+                  <div style={accentTile(c.provider)}>{c.provider.charAt(0).toUpperCase()}</div>
+                  <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: 2 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{c.provider}</span>
+                      <span style={badge(c.status === "ok" ? "open" : c.status === "needs_setup" ? "queued" : "failed")}>{c.status}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "var(--mute)" }}>{c.type}{c.label ? ` · ${c.label}` : ""}</div>
+                  </div>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--mute)" }}>{c.created}</span>
+                </div>
+              ))}
+              {!(conns || []).length && (
+                <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--mute)", fontSize: 13 }}>
+                  nenhuma conexão — registre um repositório para criar uma.
+                </div>
+              )}
+              <InfoNote>As conexões alimentam Tarefas, Pull Requests e CI. Os tokens ficam em Segredos.</InfoNote>
+            </div>
+          )}
         </div>
       )}
 
@@ -596,6 +680,75 @@ export default function Config() {
               <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Branch padrão</span>
               <input style={input} value={r.branch} onChange={(e) => setR({ ...r, branch: e.target.value })} placeholder="main" />
             </label>
+          </div>
+        </Modal>
+      )}
+
+      {iaModal === "subscription" && (
+        <Modal title="Conectar via Assinatura Claude" onClose={resetIA}
+          footer={iaStep === "idle" ? <>
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetIA}>Cancelar</button>
+            <button style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 8, opacity: iaBusy ? .6 : 1, pointerEvents: iaBusy ? "none" : "auto" }} onClick={claudeStart}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>
+              {iaBusy ? "Abrindo…" : "Autorizar com Claude"}
+            </button>
+          </> : <>
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetIA}>Cancelar</button>
+            <button style={{ ...btn, opacity: iaBusy || !iaCode.trim() ? .6 : 1, pointerEvents: iaBusy || !iaCode.trim() ? "none" : "auto" }} onClick={claudeSubmitCode}>{iaBusy ? "Verificando…" : "Confirmar"}</button>
+          </>}>
+          {iaStep === "idle" ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 16, padding: "12px 8px 4px" }}>
+              <div style={{ width: 56, height: 56, borderRadius: 15, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 14.5, fontWeight: 600, color: "var(--ink)" }}>Conectar sua conta Claude</span>
+                <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Abrimos o Claude.ai numa nova aba pra você autorizar. Nenhuma API key — o uso é debitado da sua assinatura.</span>
+              </div>
+              {iaErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{iaErr}</span>}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "4px 2px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55 }}>
+                  Autorize no Claude.ai (abriu em nova aba) e cole aqui o código exibido ao final.
+                </span>
+                <a href={iaUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5, wordBreak: "break-all" }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+                  reabrir página de autorização
+                </a>
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Código de autorização</span>
+                <input style={input} value={iaCode} autoFocus onChange={(e) => setIaCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") claudeSubmitCode(); }} placeholder="cole o código aqui" />
+              </label>
+              {iaErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{iaErr}</span>}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {iaModal === "api" && (
+        <Modal title="Conectar via API Anthropic" onClose={resetIA}
+          footer={<>
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetIA}>Cancelar</button>
+            <button style={{ ...btn, opacity: iaBusy || !iaApiKey.trim() ? .6 : 1, pointerEvents: iaBusy || !iaApiKey.trim() ? "none" : "auto" }} onClick={connectApiKey}>{iaBusy ? "Salvando…" : "Salvar"}</button>
+          </>}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>API Key</span>
+              <input style={input} type="password" value={iaApiKey} onChange={(e) => setIaApiKey(e.target.value)} placeholder="sk-ant-…" />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Modelo padrão</span>
+              <select style={sSel}>
+                {MODELS.map((m) => <option key={m} value={m}>{MODEL_LABELS[m]}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 11, padding: "14px 16px", background: "var(--accent-tint)", border: "1px solid rgba(245,166,35,.25)", borderRadius: 10 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z"/></svg>
+              <span style={{ fontSize: 12, color: "var(--mute)", lineHeight: 1.5 }}>A chave é armazenada criptografada e nunca exibida novamente. Você pode revogar o acesso a qualquer momento em Segredos.</span>
+            </div>
           </div>
         </Modal>
       )}

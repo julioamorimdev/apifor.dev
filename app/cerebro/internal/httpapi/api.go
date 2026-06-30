@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,21 @@ type API struct {
 	rl      *RateLimiter
 	// M6.2: segurança — exige JWT (fecha o fallback dev "demo owner")
 	RequireAuth bool
+	// SuperAdminEmails: lista de e-mails que recebem role "superadmin" no login.
+	SuperAdminEmails []string
+	// TokenTTL: validade do JWT emitido no login/register (0 = default 12h).
+	TokenTTL time.Duration
+	// AuthSidecarURL: base do sidecar que dirige o `claude setup-token` (OAuth
+	// da assinatura). Vazio = recurso indisponível (502 nas rotas claude/*).
+	AuthSidecarURL string
+}
+
+// tokenTTL devolve a validade configurada ou o default (12h).
+func (a *API) tokenTTL() time.Duration {
+	if a.TokenTTL > 0 {
+		return a.TokenTTL
+	}
+	return 12 * time.Hour
 }
 
 func (a *API) Routes() http.Handler {
@@ -79,7 +95,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/ci", a.ci)                             // GET ci_runs
 	mux.HandleFunc("/v1/logs", a.logs)                         // GET feed de logs (steps)
 	mux.HandleFunc("/v1/pool", a.pool)                         // GET config do pool / POST atualiza (manage)
-	mux.HandleFunc("/v1/connections", a.connections)           // GET conexões
+	mux.HandleFunc("/v1/connections", a.connections)           // GET conexões / POST motor IA
+	mux.HandleFunc("/v1/connections/claude/", a.claudeAuth)    // POST start|code|cancel (OAuth assinatura)
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -96,6 +113,14 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/notifications", a.notifications)         // GET lista, POST marca lidas
 	mux.HandleFunc("/v1/notifications/stream", a.notifStream)    // SSE de notificações
 	mux.HandleFunc("/v1/workers/stream", a.stream)        // SSE
+	// Superadmin — acesso global (role = "superadmin")
+	mux.HandleFunc("/v1/admin/stats", a.adminStats)
+	mux.HandleFunc("/v1/admin/orgs", a.adminOrgs)
+	mux.HandleFunc("/v1/admin/orgs/", a.adminOrgAction) // GET /{id} (detalhe) | POST /{id}/plan|suspend|unsuspend
+	mux.HandleFunc("/v1/admin/users", a.adminUsers)
+	mux.HandleFunc("/v1/admin/users/", a.adminUserAction) // POST /{id}/suspend|activate
+	mux.HandleFunc("/v1/admin/audit", a.adminAudit)       // GET trilha global
+	mux.HandleFunc("/v1/admin/plans", a.adminPlans)       // GET catálogo + receita
 	return a.instrument(cors(mux))
 }
 
@@ -109,6 +134,15 @@ func (a *API) caCert(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(a.CACertPEM)
 }
 
+func (a *API) isSuperAdmin(email string) bool {
+	for _, e := range a.SuperAdminEmails {
+		if strings.EqualFold(e, email) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Email, Password string }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -120,16 +154,26 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, errBody("unauthorized", "credenciais inválidas"))
 		return
 	}
+	if u.Status == "suspended" {
+		writeJSON(w, 403, errBody("suspended", "conta suspensa — contate o administrador"))
+		return
+	}
 	role := u.Role
 	if role == "" {
 		role = "owner"
 	}
-	tok, err := a.Auth.Issue(u.ID, u.OrgID, role, 15*time.Minute)
+	// Superadmin: role override, org vazia (acessa todas as orgs)
+	orgID := u.OrgID
+	if a.isSuperAdmin(u.Email) {
+		role = "superadmin"
+		orgID = ""
+	}
+	tok, err := a.Auth.Issue(u.ID, orgID, role, a.tokenTTL())
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", "falha ao emitir token"))
 		return
 	}
-	writeJSON(w, 200, map[string]string{"access_token": tok, "org_id": u.OrgID, "role": role})
+	writeJSON(w, 200, map[string]string{"access_token": tok, "org_id": orgID, "role": role})
 }
 
 // register: cria user + org (Free) + membership owner. Onboarding self-service.
@@ -153,15 +197,16 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
-	tok, _ := a.Auth.Issue(uid, oid, "owner", 15*time.Minute)
+	tok, _ := a.Auth.Issue(uid, oid, "owner", a.tokenTTL())
 	writeJSON(w, 201, map[string]string{"access_token": tok, "org_id": oid, "role": "owner"})
 }
 
 // authz extrai (userID, orgID, role) do JWT. Sem token válido: cai no demo (dev) como
 // owner SE RequireAuth=false; com RequireAuth=true devolve vazio (não autenticado).
+// Superadmin: org="" é válido (acessa todas as orgs).
 func (a *API) authz(r *http.Request) (userID, orgID, role string) {
 	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if c, err := a.Auth.Parse(t); err == nil && c.OrgID != "" {
+	if c, err := a.Auth.Parse(t); err == nil && c.Subject != "" {
 		role = c.Role
 		if role == "" {
 			role = "member"
@@ -175,9 +220,13 @@ func (a *API) authz(r *http.Request) (userID, orgID, role string) {
 }
 
 func (a *API) orgFrom(r *http.Request) string { _, org, _ := a.authz(r); return org }
+func (a *API) wspFrom(r *http.Request) string  { return r.Header.Get("X-Workspace-ID") }
 
 // can resolve o RBAC por capacidade.
 func can(role, cap string) bool {
+	if role == "superadmin" {
+		return true // superadmin tem tudo
+	}
 	switch cap {
 	case "read":
 		return true
@@ -196,6 +245,16 @@ func (a *API) requireCap(w http.ResponseWriter, r *http.Request, cap string) boo
 	_, _, role := a.authz(r)
 	if !can(role, cap) {
 		writeJSON(w, 403, errBody("forbidden", "papel '"+role+"' sem permissão p/ '"+cap+"'"))
+		return false
+	}
+	return true
+}
+
+// requireSuperAdmin responde 403 se não for superadmin.
+func (a *API) requireSuperAdmin(w http.ResponseWriter, r *http.Request) bool {
+	_, _, role := a.authz(r)
+	if role != "superadmin" {
+		writeJSON(w, 403, errBody("forbidden", "requer superadmin"))
 		return false
 	}
 	return true
@@ -349,7 +408,7 @@ func (a *API) workspaces(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) workers(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.ListWorkers(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListWorkers(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -363,7 +422,7 @@ func (a *API) tasks(w http.ResponseWriter, r *http.Request) {
 		a.createTask(w, r)
 		return
 	}
-	rows, err := a.DB.ListTasks(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListTasks(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -493,7 +552,7 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 201, map[string]any{"id": id})
 		return
 	}
-	rows, err := a.DB.ListRepos(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListRepos(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -503,7 +562,7 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 
 // prs: GET lista os pull requests abertos pelo executor.
 func (a *API) prs(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.ListPRs(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListPRs(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -513,7 +572,7 @@ func (a *API) prs(w http.ResponseWriter, r *http.Request) {
 
 // interventions: GET tarefas bloqueadas no gate de revisão humana.
 func (a *API) interventions(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.ListInterventions(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListInterventions(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -586,7 +645,7 @@ func (a *API) memories(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 201, map[string]any{"id": id})
 		return
 	}
-	rows, err := a.DB.ListMemories(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListMemories(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -631,7 +690,7 @@ func (a *API) kbDocs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 201, map[string]any{"id": id})
 		return
 	}
-	rows, err := a.DB.ListKBDocs(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListKBDocs(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -679,7 +738,7 @@ func (a *API) routines(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 201, map[string]any{"id": id})
 		return
 	}
-	rows, err := a.DB.ListRoutines(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListRoutines(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -738,7 +797,7 @@ func (a *API) routineAction(w http.ResponseWriter, r *http.Request) {
 
 // ci/qa/telemetry: telas read-only do M4.3.
 func (a *API) ci(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.ListCI(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListCI(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -747,7 +806,7 @@ func (a *API) ci(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) logs(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.ListLogs(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListLogs(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -784,12 +843,109 @@ func (a *API) pool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) connections(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if !a.requireCap(w, r, "manage") {
+			return
+		}
+		var body struct {
+			Kind string `json:"kind"` // "subscription" | "api"
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 400, errBody("bad_request", err.Error()))
+			return
+		}
+		provider, label := "Claude (assinatura)", "Conta Claude.ai"
+		if body.Kind == "api" {
+			provider, label = "Anthropic API", "API key"
+		} else {
+			body.Kind = "subscription"
+		}
+		id, err := a.DB.SetAIEngine(r.Context(), a.orgFrom(r), body.Kind, provider, label)
+		if err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "connection.ai_engine.set", "connection", id)
+		writeJSON(w, 200, map[string]any{"id": id, "provider": provider, "kind": body.Kind})
+		return
+	}
 	rows, err := a.DB.ListConnections(r.Context(), a.orgFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// claudeAuth dirige o OAuth da assinatura Claude via sidecar (`claude
+// setup-token` num PTY). A conta = a org (um CLAUDE_CONFIG_DIR por org).
+//   POST /v1/connections/claude/start  -> {url}      inicia, devolve URL de autorização
+//   POST /v1/connections/claude/code   {code} -> {ok} envia o código colado; grava a conexão
+//   POST /v1/connections/claude/cancel -> {ok}       aborta
+func (a *API) claudeAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	if a.AuthSidecarURL == "" {
+		writeJSON(w, 502, errBody("unavailable", "sidecar de OAuth Claude não configurado (AUTH_SIDECAR_URL)"))
+		return
+	}
+	action := strings.TrimPrefix(r.URL.Path, "/v1/connections/claude/")
+	org := a.orgFrom(r)
+
+	switch action {
+	case "start":
+		st, body := a.sidecar(r.Context(), "POST", "/accounts/"+org+"/start", nil)
+		writeJSONRaw(w, st, body)
+	case "code":
+		var in struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if strings.TrimSpace(in.Code) == "" {
+			writeJSON(w, 400, errBody("bad_request", "código vazio"))
+			return
+		}
+		payload, _ := json.Marshal(map[string]string{"code": in.Code})
+		st, body := a.sidecar(r.Context(), "POST", "/accounts/"+org+"/code", payload)
+		if st == 200 {
+			// sucesso: registra/atualiza o motor de IA (assinatura) no banco
+			if id, err := a.DB.SetAIEngine(r.Context(), org, "subscription", "Claude (assinatura)", "Conta Claude.ai"); err == nil {
+				a.recordAudit(r, "connection.ai_engine.set", "connection", id)
+			}
+		}
+		writeJSONRaw(w, st, body)
+	case "cancel":
+		st, body := a.sidecar(r.Context(), "POST", "/accounts/"+org+"/cancel", nil)
+		writeJSONRaw(w, st, body)
+	default:
+		writeJSON(w, 404, errBody("not_found", "ação inválida"))
+	}
+}
+
+// sidecar faz uma chamada HTTP ao auth-sidecar e devolve (status, corpo bruto).
+func (a *API) sidecar(ctx context.Context, method, path string, body []byte) (int, []byte) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = strings.NewReader(string(body))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, a.AuthSidecarURL+path, rdr)
+	if err != nil {
+		return 500, errJSON("internal", err.Error())
+	}
+	req.Header.Set("Content-Type", "application/json")
+	cl := &http.Client{Timeout: 120 * time.Second}
+	resp, err := cl.Do(req)
+	if err != nil {
+		return 502, errJSON("unavailable", "sidecar inacessível: "+err.Error())
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).
@@ -821,7 +977,7 @@ func (a *API) pinnedWorkers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"id": id})
 		return
 	}
-	rows, err := a.DB.ListPinnedWorkers(r.Context(), org)
+	rows, err := a.DB.ListPinnedWorkers(r.Context(), org, a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -847,7 +1003,7 @@ func (a *API) pinnedWorkerByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) qa(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.ListQA(r.Context(), a.orgFrom(r))
+	rows, err := a.DB.ListQA(r.Context(), a.orgFrom(r), a.wspFrom(r))
 	if err != nil {
 		writeJSON(w, 500, errBody("internal", err.Error()))
 		return
@@ -1186,13 +1342,202 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-tick.C:
-			workers, _ := a.DB.ListWorkers(r.Context(), org)
-			tasks, _ := a.DB.ListTasks(r.Context(), org)
+			workers, _ := a.DB.ListWorkers(r.Context(), org, "")
+			tasks, _ := a.DB.ListTasks(r.Context(), org, "")
 			b, _ := json.Marshal(map[string]any{"workers": workers, "tasks": tasks})
 			_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
 			fl.Flush()
 		}
 	}
+}
+
+// ── Superadmin ──
+
+func (a *API) adminStats(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	row, err := a.DB.AdminStats(r.Context())
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, row)
+}
+
+func (a *API) adminOrgs(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	rows, err := a.DB.AdminListOrgs(r.Context())
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+func (a *API) adminUsers(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	rows, err := a.DB.AdminListUsers(r.Context())
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// adminOrgAction: GET  /v1/admin/orgs/{id}            → detalhe (org + membros + tarefas)
+//                 POST /v1/admin/orgs/{id}/plan       {plan: "free|pro|team|enterprise"}
+//                 POST /v1/admin/orgs/{id}/suspend
+//                 POST /v1/admin/orgs/{id}/unsuspend
+func (a *API) adminOrgAction(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/admin/orgs/")
+	parts := strings.SplitN(rest, "/", 2)
+	if parts[0] == "" {
+		writeJSON(w, 404, errBody("not_found", "informe /v1/admin/orgs/{id}"))
+		return
+	}
+	// GET /{id} → detalhe da org
+	if r.Method == http.MethodGet && len(parts) == 1 {
+		a.adminOrgDetail(w, r, parts[0])
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if len(parts) < 2 || parts[1] == "" {
+		writeJSON(w, 404, errBody("not_found", "use POST /v1/admin/orgs/{id}/{plan|suspend|unsuspend}"))
+		return
+	}
+	orgID, action := parts[0], parts[1]
+	uid, _, _ := a.authz(r)
+	switch action {
+	case "plan":
+		var in struct{ Plan string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeJSON(w, 400, errBody("bad_request", "json inválido"))
+			return
+		}
+		switch in.Plan {
+		case "free", "pro", "team", "enterprise":
+		default:
+			writeJSON(w, 400, errBody("bad_request", "plano inválido"))
+			return
+		}
+		if err := a.DB.AdminSetOrgPlan(r.Context(), orgID, in.Plan); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.DB.WriteAudit(r.Context(), orgID, "user", uid, "admin.set_plan", "org", in.Plan)
+		writeJSON(w, 200, map[string]any{"org_id": orgID, "plan": in.Plan})
+	case "suspend":
+		if err := a.DB.AdminSuspendOrg(r.Context(), orgID, true); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.DB.WriteAudit(r.Context(), orgID, "user", uid, "admin.suspend", "org", orgID)
+		writeJSON(w, 200, map[string]any{"org_id": orgID, "suspended": true})
+	case "unsuspend":
+		if err := a.DB.AdminSuspendOrg(r.Context(), orgID, false); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.DB.WriteAudit(r.Context(), orgID, "user", uid, "admin.unsuspend", "org", orgID)
+		writeJSON(w, 200, map[string]any{"org_id": orgID, "suspended": false})
+	default:
+		writeJSON(w, 404, errBody("not_found", "ação inválida: plan|suspend|unsuspend"))
+	}
+}
+
+// adminOrgDetail: org + membros + tarefas recentes.
+func (a *API) adminOrgDetail(w http.ResponseWriter, r *http.Request, orgID string) {
+	info, err := a.DB.AdminOrgInfo(r.Context(), orgID)
+	if err != nil {
+		writeJSON(w, 404, errBody("not_found", "org não encontrada"))
+		return
+	}
+	members, _ := a.DB.AdminOrgMembers(r.Context(), orgID)
+	tasks, _ := a.DB.AdminOrgTasks(r.Context(), orgID, 20)
+	writeJSON(w, 200, map[string]any{"org": info, "members": members, "tasks": tasks})
+}
+
+// adminUserAction: POST /v1/admin/users/{id}/suspend | /v1/admin/users/{id}/activate
+func (a *API) adminUserAction(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/admin/users/")
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) < 2 || parts[0] == "" {
+		writeJSON(w, 404, errBody("not_found", "use POST /v1/admin/users/{id}/{suspend|activate}"))
+		return
+	}
+	userID, action := parts[0], parts[1]
+	var status string
+	switch action {
+	case "suspend":
+		status = "suspended"
+	case "activate":
+		status = "active"
+	default:
+		writeJSON(w, 404, errBody("not_found", "ação inválida: suspend|activate"))
+		return
+	}
+	uid, _, _ := a.authz(r)
+	if userID == uid {
+		writeJSON(w, 400, errBody("bad_request", "não é possível alterar o próprio status"))
+		return
+	}
+	if err := a.DB.AdminSetUserStatus(r.Context(), userID, status); err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	if auditOrg := a.DB.AdminUserOrg(r.Context(), userID); auditOrg != "" {
+		a.DB.WriteAudit(r.Context(), auditOrg, "user", uid, "admin.user_"+action, "user", userID)
+	}
+	writeJSON(w, 200, map[string]any{"user_id": userID, "status": status})
+}
+
+// adminAudit: trilha global. ?scope=admin filtra ações admin.*; ?limit=N.
+func (a *API) adminAudit(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	prefix := ""
+	if r.URL.Query().Get("scope") == "admin" {
+		prefix = "admin."
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows, err := a.DB.AdminListAudit(r.Context(), prefix, limit)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// adminPlans: catálogo de planos + nº de orgs/assentos por plano.
+func (a *API) adminPlans(w http.ResponseWriter, r *http.Request) {
+	if !a.requireSuperAdmin(w, r) {
+		return
+	}
+	rows, err := a.DB.AdminPlanCatalog(r.Context())
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"data": rows})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -1202,6 +1547,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 func errBody(code, msg string) map[string]any {
 	return map[string]any{"error": map[string]string{"code": code, "message": msg}}
+}
+
+// writeJSONRaw repassa um corpo JSON já serializado (ex.: resposta de proxy).
+func writeJSONRaw(w http.ResponseWriter, code int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(body)
+}
+
+// errJSON é o errBody serializado em bytes (p/ caminhos que devolvem corpo bruto).
+func errJSON(code, msg string) []byte {
+	b, _ := json.Marshal(errBody(code, msg))
+	return b
 }
 func cors(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
