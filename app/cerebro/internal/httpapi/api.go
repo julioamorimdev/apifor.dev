@@ -131,6 +131,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/tasks/test", a.tasksTest)  // POST valida credencial da fonte de tarefas
 	mux.HandleFunc("/v1/connections/integration", a.integrationConnect)     // POST conecta CI/observabilidade / DELETE
 	mux.HandleFunc("/v1/connections/integration/test", a.integrationTest)   // POST valida credencial CI/observabilidade
+	mux.HandleFunc("/v1/connections/reuse", a.reuseConnection)              // POST reaproveita identidade (github/gitlab/bitbucket) em outra aba
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -1466,13 +1467,13 @@ func (a *API) tasksConnect(w http.ResponseWriter, r *http.Request) {
 // intProviderType: provider de CI/observabilidade/docs -> tipo de conexão.
 var intProviderType = map[string]string{
 	"cypress": "ci", "github_actions": "ci", "gitlab_ci": "ci", "bitbucket_pipelines": "ci",
-	"sonarcloud": "observability", "sentry": "observability",
+	"sonarcloud": "observability", "sentry": "observability", "playwright": "observability",
 	"confluence": "docs", "github_wiki": "docs", "notion": "docs",
 }
 var intProviderLabel = map[string]string{
 	"cypress": "Cypress Cloud", "github_actions": "GitHub Actions", "gitlab_ci": "GitLab CI",
 	"bitbucket_pipelines": "Bitbucket Pipelines", "sonarcloud": "SonarCloud", "sentry": "Sentry",
-	"confluence": "Confluence", "github_wiki": "GitHub Wiki", "notion": "Notion",
+	"playwright": "Playwright", "confluence": "Confluence", "github_wiki": "GitHub Wiki", "notion": "Notion",
 }
 
 type intBody struct {
@@ -1554,6 +1555,13 @@ func (a *API) validateIntegration(ctx context.Context, in intBody) (ok bool, who
 			return false, "", "Cypress exige record key + project id"
 		}
 		return true, "project " + strings.TrimSpace(in.Project), "registrado (record key não é validada online)"
+	case "playwright":
+		// Playwright (Microsoft Playwright Testing) usa access token + service
+		// URL; sem endpoint público simples de validação — registramos.
+		if tok == "" {
+			return false, "", "Playwright exige access token"
+		}
+		return true, "Playwright", "registrado (token não é validado online)"
 	case "sonarcloud":
 		if tok == "" {
 			return false, "", "token vazio"
@@ -1670,6 +1678,65 @@ func (a *API) integrationConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAudit(r, "connection."+ctype+".set", "connection", id)
 	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
+}
+
+// família de providers: como cada provedor aparece em cada aba.
+var familyProviders = map[string]map[string]string{
+	"github":    {"code": "github", "tasks": "github", "ci": "github_actions", "docs": "github_wiki"},
+	"gitlab":    {"code": "gitlab", "tasks": "gitlab", "ci": "gitlab_ci"},
+	"bitbucket": {"code": "bitbucket", "tasks": "bitbucket", "ci": "bitbucket_pipelines"},
+}
+
+// reuseConnection reaproveita uma identidade já conectada (ex: GitHub OAuth)
+// p/ ativar a conexão de outra aba (code/tasks/ci/docs) sem refazer o login.
+func (a *API) reuseConnection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var in struct {
+		Family string `json:"family"` // github | gitlab | bitbucket
+		Target string `json:"target"` // code | tasks | ci | docs
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	fam, okF := familyProviders[in.Family]
+	provider, okT := fam[in.Target]
+	if !okF || !okT {
+		writeJSON(w, 400, errBody("bad_request", "família ou destino inválido"))
+		return
+	}
+	org := a.orgFrom(r)
+	// identidade existente: qualquer provider da família já conectado.
+	all := make([]string, 0, len(fam))
+	for _, p := range fam {
+		all = append(all, p)
+	}
+	label := a.DB.FindConnectionLabelByProviders(r.Context(), org, all)
+	if label == "" {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": "nenhuma conexão " + in.Family + " para reaproveitar"})
+		return
+	}
+	var id string
+	var err error
+	switch in.Target {
+	case "code":
+		id, err = a.DB.SetCodeProvider(r.Context(), org, provider, label)
+	case "tasks":
+		id, err = a.DB.SetTaskSource(r.Context(), org, provider, label)
+	case "ci":
+		id, err = a.DB.SetTypedConnection(r.Context(), org, "ci", provider, label)
+	case "docs":
+		id, err = a.DB.SetTypedConnection(r.Context(), org, "docs", provider, label)
+	}
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	a.recordAudit(r, "connection.reuse", "connection", id)
+	writeJSON(w, 200, map[string]any{"ok": true, "who": label, "provider": provider})
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).

@@ -396,6 +396,19 @@ func (d *DB) DeleteTaskSource(ctx context.Context, orgID, provider string) error
 	})
 }
 
+// FindConnectionLabelByProviders devolve o label (ex: login) de qualquer
+// conexão existente da org cujo provider esteja na lista. "" se não houver.
+// Usado p/ reaproveitar uma identidade (ex: GitHub) entre abas.
+func (d *DB) FindConnectionLabelByProviders(ctx context.Context, orgID string, providers []string) string {
+	var label string
+	if err := d.Pool.QueryRow(ctx, `SELECT COALESCE(label,'') FROM connection
+		WHERE org_id=$1 AND provider = ANY($2) AND COALESCE(label,'')<>''
+		ORDER BY created_at DESC LIMIT 1`, orgID, providers).Scan(&label); err != nil {
+		return ""
+	}
+	return label
+}
+
 // SetTypedConnection registra/atualiza uma conexão de um tipo (ci,
 // observability, …). Um por (tipo, provider). ctype é validado pelo caller.
 func (d *DB) SetTypedConnection(ctx context.Context, orgID, ctype, provider, label string) (string, error) {

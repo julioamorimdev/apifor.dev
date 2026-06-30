@@ -29,6 +29,7 @@ const INT_META: Record<string, { title: string; ctype: "ci" | "observability" | 
   bitbucket_pipelines: { title: "Bitbucket Pipelines", ctype: "ci",            fields: ["username", "token"], tokenLabel: "App password",          help: "Usuário + app password com escopo pipeline.",         docs: "https://bitbucket.org/account/settings/app-passwords/", iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
   sonarcloud:          { title: "SonarCloud",          ctype: "observability", fields: ["token"],            tokenLabel: "Token",                 help: "SonarCloud → My Account → Security → Generate Token.", docs: "https://sonarcloud.io/account/security",          iconPath: "M5 18c0-7 4-11 11-11M8 18c0-5 2.5-8 8-8M11 18c0-3 1.5-5 5-5" },
   sentry:              { title: "Sentry",              ctype: "observability", fields: ["token"],            tokenLabel: "Auth token",            help: "Sentry → Settings → Auth Tokens (org).",              docs: "https://sentry.io/settings/account/api/auth-tokens/", iconPath: "M12 3l9 16H3l9-16zM12 9l4.5 8M12 9l-4.5 8" },
+  playwright:          { title: "Playwright",          ctype: "observability", fields: ["token"],            tokenLabel: "Access token",          help: "Microsoft Playwright Testing — access token do serviço.",         docs: "https://aka.ms/mpt/access-tokens", noTest: true, iconPath: "M12 3c-4 0-7 3-8 7 3-2 5-2 7 0 1.5 1.5 3 1.5 5 .5-1 4-3 6-7 6.5C19 7 16 3 12 3z" },
   confluence:          { title: "Confluence",          ctype: "docs",          fields: ["site", "email", "token"], tokenLabel: "API token",       help: "Confluence Cloud (Atlassian) — site + e-mail + API token.",       docs: "https://id.atlassian.com/manage-profile/security/api-tokens", iconPath: "M5 17c4-7 7-7 14 1M19 7c-4 7-7 7-14-1" },
   github_wiki:         { title: "GitHub Wiki",         ctype: "docs",          fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitHub com escopo repo (wikis fazem parte do repo).",      docs: "https://github.com/settings/tokens", oauth: "docs", iconPath: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" },
   notion:              { title: "Notion",              ctype: "docs",          fields: ["token"],            tokenLabel: "Integration token",     help: "Notion → Settings → Integrations (internal integration token).", docs: "https://www.notion.so/my-integrations", iconPath: "M4 4h13l3 3v13H4zM8 8v8M8 8l8 8M16 8v8" },
@@ -366,6 +367,34 @@ export default function Config() {
   async function disconnectInt(provider: string) {
     await apiDelete(`/v1/connections/integration?provider=${provider}`);
     reloadConns();
+  }
+
+  // ── reaproveitar identidade já conectada (github/gitlab/bitbucket) ──
+  function providerFamily(p: string): "github" | "gitlab" | "bitbucket" | null {
+    if (p.startsWith("github")) return "github";
+    if (p.startsWith("gitlab")) return "gitlab";
+    if (p.startsWith("bitbucket")) return "bitbucket";
+    return null;
+  }
+  function familyIdentity(fam: string): string | null {
+    return (conns || []).find((c) => providerFamily(c.provider) === fam)?.label || null;
+  }
+  async function reuseConn(family: string, target: "code" | "tasks" | "ci" | "docs") {
+    await apiPost("/v1/connections/reuse", { family, target });
+    reloadConns();
+  }
+  // botão "Reaproveitar @login" quando a família já está conectada em outra aba
+  function reuseBtn(provider: string, target: "code" | "tasks" | "ci" | "docs") {
+    const fam = providerFamily(provider);
+    if (!fam) return null;
+    const id = familyIdentity(fam);
+    if (!id) return null;
+    return (
+      <button title={`Usar a conexão ${fam} já autenticada (@${id})`} style={{ ...sFilledBtn, background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)" }} onClick={() => reuseConn(fam, target)}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12a8 8 0 0 1 8-8 8 8 0 0 1 6.9 4M20 4v4h-4M20 12a8 8 0 0 1-8 8 8 8 0 0 1-6.9-4M4 20v-4h4"/></svg>
+        Reaproveitar @{id}
+      </button>
+    );
   }
 
   const loadPool = useCallback(() => {
@@ -820,7 +849,10 @@ export default function Config() {
                         </button>
                       </div>
                     ) : (
-                      <button style={sFilledBtn} onClick={() => { resetGit(); setGitModal(key); }}>Conectar</button>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {reuseBtn(key, "code")}
+                        <button style={sFilledBtn} onClick={() => { resetGit(); setGitModal(key); }}>Conectar</button>
+                      </div>
                     )}
                   </div>
                 );
@@ -859,7 +891,10 @@ export default function Config() {
                         </button>
                       </div>
                     ) : (
-                      <button style={sFilledBtn} onClick={() => { resetTask(); setTaskModal(key); }}>Conectar</button>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {reuseBtn(key, "tasks")}
+                        <button style={sFilledBtn} onClick={() => { resetTask(); setTaskModal(key); }}>Conectar</button>
+                      </div>
                     )}
                   </div>
                 );
@@ -871,7 +906,7 @@ export default function Config() {
               {(connTab === "ci"
                 ? ["cypress", "github_actions", "gitlab_ci", "bitbucket_pipelines"]
                 : connTab === "observ"
-                ? ["sonarcloud", "sentry"]
+                ? ["sonarcloud", "sentry", "playwright"]
                 : ["confluence", "github_wiki", "notion"]
               ).map((key) => {
                 const m = INT_META[key];
@@ -897,7 +932,10 @@ export default function Config() {
                         </button>
                       </div>
                     ) : (
-                      <button style={sFilledBtn} onClick={() => { resetInt(); setIntModal(key); }}>Conectar</button>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {reuseBtn(key, m.ctype === "docs" ? "docs" : "ci")}
+                        <button style={sFilledBtn} onClick={() => { resetInt(); setIntModal(key); }}>Conectar</button>
+                      </div>
                     )}
                   </div>
                 );
