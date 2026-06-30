@@ -35,7 +35,7 @@ services:
           echo "schema base já aplicado; pulando 001-005"
         fi
         # patches idempotentes — rodam sempre (seguros p/ reaplicar)
-        for f in /sql/006_task_source.sql; do
+        for f in /sql/006_task_source.sql /sql/007_docs_source.sql; do
           echo "applying patch $$f"
           psql "$$DB" -v ON_ERROR_STOP=1 -f "$$f"
         done

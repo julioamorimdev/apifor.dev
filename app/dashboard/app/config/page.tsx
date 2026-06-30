@@ -20,15 +20,18 @@ const AGENTS = [
 ];
 const FOCOS = ["Features e correções", "Apenas segurança", "Documentação", "Testes", "Tudo"];
 
-// CI remoto + Observabilidade: config de cada provider (campos + ajuda).
-type IntField = "token" | "username" | "project";
-const INT_META: Record<string, { title: string; ctype: "ci" | "observability"; fields: IntField[]; tokenLabel: string; help: string; docs: string; noTest?: boolean; iconPath: string }> = {
+// CI remoto + Observabilidade + Documentação: config de cada provider.
+type IntField = "token" | "username" | "project" | "email" | "site";
+const INT_META: Record<string, { title: string; ctype: "ci" | "observability" | "docs"; fields: IntField[]; tokenLabel: string; help: string; docs: string; noTest?: boolean; oauth?: "docs" | "ci"; iconPath: string }> = {
   cypress:             { title: "Cypress Cloud",       ctype: "ci",            fields: ["project", "token"], tokenLabel: "Record key",           help: "Cypress Cloud → Project Settings → Record Keys.",      docs: "https://cloud.cypress.io",                       noTest: true, iconPath: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM8 9c-1.5 0-2.5 1.3-2.5 3s1 3 2.5 3c1 0 1.7-.5 2-1.3M16 8.7c-.4-.5-1-.7-1.7-.7-1.5 0-2.5 1.3-2.5 3s1 3 2.5 3l-1.3 3" },
-  github_actions:      { title: "GitHub Actions",      ctype: "ci",            fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitHub com escopo repo + workflow.",            docs: "https://github.com/settings/tokens",             iconPath: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" },
+  github_actions:      { title: "GitHub Actions",      ctype: "ci",            fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitHub com escopo repo + workflow.",            docs: "https://github.com/settings/tokens",             oauth: "ci", iconPath: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" },
   gitlab_ci:           { title: "GitLab CI",           ctype: "ci",            fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitLab com escopos api e read_api.",            docs: "https://gitlab.com/-/user_settings/personal_access_tokens", iconPath: "M12 21l3.5-7H8.5L12 21zM12 21L3 10l1.5-5L8.5 14M12 21l9-11-1.5-5L15.5 14" },
   bitbucket_pipelines: { title: "Bitbucket Pipelines", ctype: "ci",            fields: ["username", "token"], tokenLabel: "App password",          help: "Usuário + app password com escopo pipeline.",         docs: "https://bitbucket.org/account/settings/app-passwords/", iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
   sonarcloud:          { title: "SonarCloud",          ctype: "observability", fields: ["token"],            tokenLabel: "Token",                 help: "SonarCloud → My Account → Security → Generate Token.", docs: "https://sonarcloud.io/account/security",          iconPath: "M5 18c0-7 4-11 11-11M8 18c0-5 2.5-8 8-8M11 18c0-3 1.5-5 5-5" },
   sentry:              { title: "Sentry",              ctype: "observability", fields: ["token"],            tokenLabel: "Auth token",            help: "Sentry → Settings → Auth Tokens (org).",              docs: "https://sentry.io/settings/account/api/auth-tokens/", iconPath: "M12 3l9 16H3l9-16zM12 9l4.5 8M12 9l-4.5 8" },
+  confluence:          { title: "Confluence",          ctype: "docs",          fields: ["site", "email", "token"], tokenLabel: "API token",       help: "Confluence Cloud (Atlassian) — site + e-mail + API token.",       docs: "https://id.atlassian.com/manage-profile/security/api-tokens", iconPath: "M5 17c4-7 7-7 14 1M19 7c-4 7-7 7-14-1" },
+  github_wiki:         { title: "GitHub Wiki",         ctype: "docs",          fields: ["token"],            tokenLabel: "Personal access token", help: "Token GitHub com escopo repo (wikis fazem parte do repo).",      docs: "https://github.com/settings/tokens", oauth: "docs", iconPath: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" },
+  notion:              { title: "Notion",              ctype: "docs",          fields: ["token"],            tokenLabel: "Integration token",     help: "Notion → Settings → Integrations (internal integration token).", docs: "https://www.notion.so/my-integrations", iconPath: "M4 4h13l3 3v13H4zM8 8v8M8 8l8 8M16 8v8" },
 };
 
 // ─── shared styles ───────────────────────────────────────────────────
@@ -221,7 +224,7 @@ export default function Config() {
 
   // device-flow do GitHub reutilizável: purpose "code" (conexão de código) ou
   // "tasks" (fonte de tarefas). O backend grava no tipo certo.
-  async function startGithubDevice(purpose: "code" | "tasks") {
+  async function startGithubDevice(purpose: "code" | "tasks" | "ci" | "docs") {
     setGhStarting(true); setGhErr(""); setGhStatus(""); setGhDevice(null);
     try {
       const r = await apiPost<{ user_code?: string; verification_uri?: string; interval?: number; error?: { message?: string } }>("/v1/connections/git/github/device", { purpose });
@@ -234,7 +237,7 @@ export default function Config() {
         try {
           const s = await apiGet<{ status?: string; login?: string; error?: string }>("/v1/connections/git/github/device/status");
           setGhStatus(s?.status || "");
-          if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); resetTask(); }
+          if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); resetTask(); resetInt(); }
           else if (s?.status === "expired" || s?.status === "denied" || s?.status === "error") {
             stopGhPoll(); setGhDevice(null); setGhErr(s?.error || "autorização falhou");
           }
@@ -276,7 +279,7 @@ export default function Config() {
   }
 
   // ── fonte de tarefas: GitHub / GitLab / Bitbucket / Jira / Trello ──
-  type TaskProv = "github" | "gitlab" | "bitbucket" | "jira" | "trello";
+  type TaskProv = "github" | "gitlab" | "bitbucket" | "jira" | "trello" | "atlassian_goals";
   const [taskModal, setTaskModal] = useState<TaskProv | null>(null);
   const [taskF, setTaskF] = useState({ token: "", username: "", email: "", site: "", key: "" });
   const [taskBusy, setTaskBusy] = useState(false);
@@ -324,14 +327,16 @@ export default function Config() {
 
   // ── CI remoto + observabilidade ──
   const [intModal, setIntModal] = useState<string | null>(null); // provider key
-  const [intF, setIntF] = useState({ token: "", username: "", project: "" });
+  const [intF, setIntF] = useState({ token: "", username: "", project: "", email: "", site: "" });
   const [intBusy, setIntBusy] = useState(false);
   const [intTesting, setIntTesting] = useState(false);
   const [intTest, setIntTest] = useState<{ ok: boolean; msg: string } | null>(null);
 
   function resetInt() {
-    setIntModal(null); setIntF({ token: "", username: "", project: "" });
+    stopGhPoll();
+    setIntModal(null); setIntF({ token: "", username: "", project: "", email: "", site: "" });
     setIntBusy(false); setIntTesting(false); setIntTest(null);
+    setGhMethod("oauth"); setGhDevice(null); setGhStatus(""); setGhErr(""); setGhStarting(false);
   }
   function intReady(provider: string) {
     const m = INT_META[provider]; if (!m) return false;
@@ -730,6 +735,7 @@ export default function Config() {
               ["tarefas", "Fonte de tarefas"],
               ["ci",      "CI remoto"],
               ["observ",  "Observabilidade"],
+              ["docs",    "Documentação"],
               ["ia",      "Motor de IA"],
             ] as [string, string][]).map(([k, label]) => (
               <button key={k} onClick={() => setConnTab(k)} style={sConnPill(connTab === k)}>
@@ -738,6 +744,7 @@ export default function Config() {
                   {k === "tarefas" && <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></>}
                   {k === "ci"      && <><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></>}
                   {k === "observ"  && <><circle cx="12" cy="12" r="2.5"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/></>}
+                  {k === "docs"    && <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></>}
                   {k === "ia"      && <path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/>}
                 </svg>
                 {label}
@@ -827,6 +834,7 @@ export default function Config() {
                 { key: "gitlab" as const,    title: "GitLab Issues & MRs",    sub: "Tarefas de issues e merge requests do GitLab.",       iconPath: "M12 21l3.5-7H8.5L12 21zM12 21L3 10l1.5-5L8.5 14M12 21l9-11-1.5-5L15.5 14" },
                 { key: "bitbucket" as const, title: "Bitbucket Issues & PRs", sub: "Tarefas de issues e pull requests do Bitbucket.",   iconPath: "M3 4h18l-2.5 16H5.5L3 4zM9 9h6l-.7 5h-4.6L9 9z" },
                 { key: "jira" as const,      title: "Jira",                  sub: "Tarefas dos seus projetos Jira (e-mail + API token).", iconPath: "M12 2L3 11l9 9 9-9-9-9zM12 7l4 4-4 4-4-4 4-4z" },
+                { key: "atlassian_goals" as const, title: "Atlassian Goals",  sub: "Goals do Atlassian (Atlas) como tarefas — site + e-mail + API token.", iconPath: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 7v5l3 3" },
                 { key: "trello" as const,    title: "Trello",                sub: "Cards dos seus boards Trello (API key + token).",     iconPath: "M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM7 7h4v9H7zM13 7h4v5h-4z" },
               ]).map(({ key, title, sub, iconPath }) => {
                 const c = (conns || []).find((x) => x.type === "tasks" && x.provider === key);
@@ -858,11 +866,13 @@ export default function Config() {
               })}
               <InfoNote>De onde vêm as tarefas dos workers. GitHub aceita OAuth ou token; os demais por token/API. Credenciais validadas na hora.</InfoNote>
             </div>
-          ) : (connTab === "ci" || connTab === "observ") ? (
+          ) : (connTab === "ci" || connTab === "observ" || connTab === "docs") ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {(connTab === "ci"
                 ? ["cypress", "github_actions", "gitlab_ci", "bitbucket_pipelines"]
-                : ["sonarcloud", "sentry"]
+                : connTab === "observ"
+                ? ["sonarcloud", "sentry"]
+                : ["confluence", "github_wiki", "notion"]
               ).map((key) => {
                 const m = INT_META[key];
                 const c = (conns || []).find((x) => x.type === m.ctype && x.provider === key);
@@ -892,7 +902,7 @@ export default function Config() {
                   </div>
                 );
               })}
-              <InfoNote>{connTab === "ci" ? "CI remoto: dispara e lê pipelines/testes. Credenciais validadas na hora." : "Observabilidade: erros e qualidade de código. Tokens validados contra a API."}</InfoNote>
+              <InfoNote>{connTab === "ci" ? "CI remoto: dispara e lê pipelines/testes. Credenciais validadas na hora." : connTab === "observ" ? "Observabilidade: erros e qualidade de código. Tokens validados contra a API." : "Documentação: bases de conhecimento que os workers leem/escrevem. GitHub Wiki aceita OAuth."}</InfoNote>
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
@@ -1150,9 +1160,10 @@ export default function Config() {
       })()}
 
       {taskModal && (() => {
-        const titles: Record<TaskProv, string> = { github: "GitHub Issues & PRs", gitlab: "GitLab Issues & MRs", bitbucket: "Bitbucket Issues & PRs", jira: "Jira", trello: "Trello" };
+        const titles: Record<TaskProv, string> = { github: "GitHub Issues & PRs", gitlab: "GitLab Issues & MRs", bitbucket: "Bitbucket Issues & PRs", jira: "Jira", trello: "Trello", atlassian_goals: "Atlassian Goals" };
+        const isAtlassian = taskModal === "jira" || taskModal === "atlassian_goals";
         const ready = taskModal === "bitbucket" ? !!(taskF.username.trim() && taskF.token.trim())
-          : taskModal === "jira" ? !!(taskF.site.trim() && taskF.email.trim() && taskF.token.trim())
+          : isAtlassian ? !!(taskF.site.trim() && taskF.email.trim() && taskF.token.trim())
           : taskModal === "trello" ? !!(taskF.key.trim() && taskF.token.trim())
           : !!taskF.token.trim();
         const oauthMode = taskModal === "github" && ghMethod === "oauth";
@@ -1196,12 +1207,12 @@ export default function Config() {
                 </div>
               )
             ) : (<>
-              {taskModal === "jira" && field("Site Jira", "site", "empresa.atlassian.net")}
-              {taskModal === "jira" && field("E-mail", "email", "voce@empresa.com")}
+              {isAtlassian && field("Site Atlassian", "site", "empresa.atlassian.net")}
+              {isAtlassian && field("E-mail", "email", "voce@empresa.com")}
               {taskModal === "bitbucket" && field("Usuário Bitbucket", "username", "seu_usuario")}
               {taskModal === "trello" && field("API key", "key", "sua api key")}
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {lbl(taskModal === "jira" ? "API token" : taskModal === "trello" ? "Token" : taskModal === "bitbucket" ? "App password" : "Personal access token")}
+                {lbl(isAtlassian ? "API token" : taskModal === "trello" ? "Token" : taskModal === "bitbucket" ? "App password" : "Personal access token")}
                 <div style={{ display: "flex", gap: 8 }}>
                   <input style={{ ...input, flex: 1 }} type="password" value={taskF.token} onChange={(e) => { setTaskF({ ...taskF, token: e.target.value }); setTaskTest(null); }} placeholder="cole aqui" />
                   <button style={{ height: 38, padding: "0 14px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer", opacity: taskTesting || !ready ? .6 : 1, pointerEvents: taskTesting || !ready ? "none" : "auto" }} onClick={testTask}>{taskTesting ? "Testando…" : "Testar"}</button>
@@ -1222,15 +1233,43 @@ export default function Config() {
       {intModal && (() => {
         const m = INT_META[intModal];
         const ready = intReady(intModal);
-        const fieldLabels: Record<IntField, string> = { token: m.tokenLabel, username: "Usuário", project: "Project ID" };
-        const placeholders: Record<IntField, string> = { token: "cole aqui", username: "seu_usuario", project: "ex: abc123" };
+        const intOauth = !!m.oauth && ghMethod === "oauth";
+        const fieldLabels: Record<IntField, string> = { token: m.tokenLabel, username: "Usuário", project: "Project ID", email: "E-mail", site: "Site" };
+        const placeholders: Record<IntField, string> = { token: "cole aqui", username: "seu_usuario", project: "ex: abc123", email: "voce@empresa.com", site: "empresa.atlassian.net" };
         return (
         <Modal title={`Conectar ${m.title}`} onClose={resetInt}
-          footer={<>
+          footer={intOauth ? (
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetInt}>Fechar</button>
+          ) : <>
             <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetInt}>Cancelar</button>
             <button style={{ ...btn, opacity: intBusy || !ready ? .6 : 1, pointerEvents: intBusy || !ready ? "none" : "auto" }} onClick={connectInt}>{intBusy ? "Conectando…" : "Conectar"}</button>
           </>}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {m.oauth && (
+              <div style={{ display: "flex", gap: 6, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 9, padding: 4 }}>
+                {([["oauth", "OAuth"], ["token", "Token"]] as [typeof ghMethod, string][]).map(([k, l]) => (
+                  <button key={k} onClick={() => { setGhMethod(k); setIntTest(null); }} style={{ flex: 1, height: 32, borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600, background: ghMethod === k ? "var(--card)" : "transparent", color: ghMethod === k ? "var(--ink)" : "var(--dim)" }}>{l}</button>
+                ))}
+              </div>
+            )}
+            {intOauth ? (
+              !ghDevice ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 16, padding: "10px 8px 4px" }}>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto.</span>
+                  {ghErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{ghErr}</span>}
+                  <button style={{ ...btn, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice(m.oauth!)}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)" }}>Em <a href={ghDevice.verification_uri} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>{ghDevice.verification_uri.replace("https://", "")}</a> digite o código:</span>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 26, fontWeight: 700, letterSpacing: 4, color: "var(--ink)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 20px" }}>{ghDevice.user_code}</div>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--mute)" }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+                    {ghStatus === "pending" ? "aguardando autorização no GitHub…" : ghStatus}
+                  </span>
+                </div>
+              )
+            ) : (<>
             {m.fields.filter((f) => f !== "token").map((f) => (
               <div key={f} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>{fieldLabels[f]}</span>
@@ -1254,6 +1293,7 @@ export default function Config() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
               <span style={{ fontSize: 12, color: "var(--mute)", lineHeight: 1.5 }}>{m.help} <a href={m.docs} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>Abrir →</a>{m.noTest ? " A record key do Cypress não é validada online." : ""}</span>
             </div>
+            </>)}
           </div>
         </Modal>
         );

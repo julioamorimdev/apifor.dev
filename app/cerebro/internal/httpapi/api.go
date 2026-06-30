@@ -1183,12 +1183,12 @@ func (a *API) githubDeviceStart(w http.ResponseWriter, r *http.Request) {
 	}
 	org := a.orgFrom(r)
 	var startBody struct {
-		Purpose string `json:"purpose"` // "code" (default) | "tasks"
+		Purpose string `json:"purpose"` // "code" (default) | "tasks" | "ci"
 	}
 	_ = json.NewDecoder(r.Body).Decode(&startBody)
 	purpose := "code"
-	if startBody.Purpose == "tasks" {
-		purpose = "tasks"
+	if startBody.Purpose == "tasks" || startBody.Purpose == "ci" || startBody.Purpose == "docs" {
+		purpose = startBody.Purpose
 	}
 	form := url.Values{"client_id": {a.GitHubOAuthClientID}, "scope": {"repo workflow"}}
 	req, _ := http.NewRequestWithContext(r.Context(), "POST", "https://github.com/login/device/code", strings.NewReader(form.Encode()))
@@ -1262,9 +1262,14 @@ func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int, 
 		if tok.AccessToken != "" {
 			ok, login, _, _ := a.validateGitToken(context.Background(), "github", tok.AccessToken, "")
 			if ok {
-				if purpose == "tasks" {
+				switch purpose {
+				case "tasks":
 					_, _ = a.DB.SetTaskSource(context.Background(), org, "github", login)
-				} else {
+				case "ci":
+					_, _ = a.DB.SetTypedConnection(context.Background(), org, "ci", "github_actions", login)
+				case "docs":
+					_, _ = a.DB.SetTypedConnection(context.Background(), org, "docs", "github_wiki", login)
+				default:
 					_, _ = a.DB.SetCodeProvider(context.Background(), org, "github", login)
 				}
 				set("authorized", login, "")
@@ -1311,7 +1316,7 @@ func (a *API) githubDeviceStatus(w http.ResponseWriter, r *http.Request) {
 // taskSourceLabels: providers de fonte de tarefas suportados.
 var taskSourceLabels = map[string]string{
 	"github": "GitHub", "gitlab": "GitLab", "bitbucket": "Bitbucket",
-	"jira": "Jira", "trello": "Trello",
+	"jira": "Jira", "trello": "Trello", "atlassian_goals": "Atlassian Goals",
 }
 
 type taskBody struct {
@@ -1330,12 +1335,16 @@ func (a *API) validateTaskSource(ctx context.Context, in taskBody) (ok bool, who
 	case "github", "gitlab", "bitbucket":
 		o, w2, _, m := a.validateGitToken(ctx, in.Provider, strings.TrimSpace(in.Token), strings.TrimSpace(in.Username))
 		return o, w2, m
-	case "jira":
+	case "jira", "atlassian_goals":
 		site := strings.TrimSpace(in.Site)
 		site = strings.TrimPrefix(strings.TrimPrefix(site, "https://"), "http://")
 		site = strings.TrimSuffix(site, "/")
+		who1 := "Jira"
+		if in.Provider == "atlassian_goals" {
+			who1 = "Atlassian Goals"
+		}
 		if site == "" || strings.TrimSpace(in.Email) == "" || strings.TrimSpace(in.Token) == "" {
-			return false, "", "Jira exige site, e-mail e API token"
+			return false, "", who1 + " exige site, e-mail e API token"
 		}
 		req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+site+"/rest/api/3/myself", nil)
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(in.Email)+":"+strings.TrimSpace(in.Token))))
@@ -1454,14 +1463,16 @@ func (a *API) tasksConnect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
 }
 
-// intProviderType: provider de CI/observabilidade -> tipo de conexão.
+// intProviderType: provider de CI/observabilidade/docs -> tipo de conexão.
 var intProviderType = map[string]string{
 	"cypress": "ci", "github_actions": "ci", "gitlab_ci": "ci", "bitbucket_pipelines": "ci",
 	"sonarcloud": "observability", "sentry": "observability",
+	"confluence": "docs", "github_wiki": "docs", "notion": "docs",
 }
 var intProviderLabel = map[string]string{
 	"cypress": "Cypress Cloud", "github_actions": "GitHub Actions", "gitlab_ci": "GitLab CI",
 	"bitbucket_pipelines": "Bitbucket Pipelines", "sonarcloud": "SonarCloud", "sentry": "Sentry",
+	"confluence": "Confluence", "github_wiki": "GitHub Wiki", "notion": "Notion",
 }
 
 type intBody struct {
@@ -1469,6 +1480,8 @@ type intBody struct {
 	Token    string `json:"token"`
 	Username string `json:"username"` // bitbucket pipelines
 	Project  string `json:"project"`  // cypress (project id)
+	Email    string `json:"email"`    // confluence (Atlassian)
+	Site     string `json:"site"`     // confluence (ex: empresa.atlassian.net)
 }
 
 // validateIntegration valida a credencial de CI/observabilidade.
@@ -1484,6 +1497,56 @@ func (a *API) validateIntegration(ctx context.Context, in intBody) (ok bool, who
 	case "bitbucket_pipelines":
 		o, w2, _, m := a.validateGitToken(ctx, "bitbucket", tok, strings.TrimSpace(in.Username))
 		return o, w2, m
+	case "github_wiki":
+		o, w2, _, m := a.validateGitToken(ctx, "github", tok, "")
+		return o, w2, m
+	case "confluence":
+		site := strings.TrimSpace(in.Site)
+		site = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(site, "https://"), "http://"), "/")
+		if site == "" || strings.TrimSpace(in.Email) == "" || tok == "" {
+			return false, "", "Confluence exige site, e-mail e API token"
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+site+"/wiki/rest/api/space?limit=1", nil)
+		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(in.Email)+":"+tok)))
+		req.Header.Set("Accept", "application/json")
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return false, "", "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return false, "", "credencial Confluence inválida (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+		}
+		return true, site, "conectado a " + site
+	case "notion":
+		if tok == "" {
+			return false, "", "token vazio"
+		}
+		req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.notion.com/v1/users/me", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Notion-Version", "2022-06-28")
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			return false, "", "falha de rede: " + err.Error()
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return false, "", "token Notion inválido (HTTP " + strconv.Itoa(resp.StatusCode) + ")"
+		}
+		var u struct {
+			Name string `json:"name"`
+			Bot  struct {
+				Owner struct {
+					Workspace bool `json:"workspace"`
+				} `json:"owner"`
+			} `json:"bot"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&u)
+		who = u.Name
+		if who == "" {
+			who = "Notion"
+		}
+		return true, who, "conectado (" + who + ")"
 	case "cypress":
 		// Cypress Cloud não tem endpoint público simples de validação de
 		// record key; exigimos record key + project id e registramos.
