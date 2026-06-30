@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiDelete, apiGet, apiPost, badge, btn, input, Modal, Page, PageHead, short, Toggle, usePoll } from "../ui";
 
 type Repo    = { id: string; name: string; default_branch: string; clone_url: string };
@@ -191,10 +191,46 @@ export default function Config() {
   const [gitTesting, setGitTesting] = useState(false);
   const [gitTest, setGitTest]   = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // GitHub device-flow (OAuth) — alternativa ao token
+  const [ghMethod, setGhMethod] = useState<"oauth" | "token">("oauth");
+  const [ghDevice, setGhDevice] = useState<{ user_code: string; verification_uri: string } | null>(null);
+  const [ghStatus, setGhStatus] = useState("");
+  const ghPoll = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function stopGhPoll() { if (ghPoll.current) { clearInterval(ghPoll.current); ghPoll.current = null; } }
+
   function resetGit() {
+    stopGhPoll();
     setGitModal(null); setGitToken(""); setGitUser("");
     setGitBusy(false); setGitTesting(false); setGitTest(null);
+    setGhMethod("oauth"); setGhDevice(null); setGhStatus("");
   }
+
+  async function startGithubDevice() {
+    setGitBusy(true); setGitTest(null); setGhStatus("");
+    try {
+      const r = await apiPost<{ user_code?: string; verification_uri?: string; interval?: number; error?: { message?: string } }>("/v1/connections/git/github/device", {});
+      if (!r?.user_code || !r?.verification_uri) throw new Error(r?.error?.message || "falha ao iniciar OAuth");
+      setGhDevice({ user_code: r.user_code, verification_uri: r.verification_uri });
+      setGhStatus("pending");
+      window.open(r.verification_uri, "_blank", "noopener,noreferrer");
+      stopGhPoll();
+      ghPoll.current = setInterval(async () => {
+        try {
+          const s = await apiGet<{ status?: string; login?: string; error?: string }>("/v1/connections/git/github/device/status");
+          setGhStatus(s?.status || "");
+          if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); }
+          else if (s?.status === "expired" || s?.status === "denied" || s?.status === "error") {
+            stopGhPoll(); setGhDevice(null); setGitTest({ ok: false, msg: s?.error || "autorização falhou" });
+          }
+        } catch { /* segue tentando */ }
+      }, Math.max(2, r.interval || 5) * 1000);
+    } catch (e) {
+      setGitTest({ ok: false, msg: e instanceof Error ? e.message : "falha ao iniciar OAuth" });
+    } finally { setGitBusy(false); }
+  }
+
+  useEffect(() => () => stopGhPoll(), []);
 
   async function testGit() {
     if (!gitToken.trim() || !gitModal) return;
@@ -867,13 +903,44 @@ export default function Config() {
           bitbucket: { title: "Bitbucket", tokenLabel: "App password",          tokenHint: "app password",            help: "Crie em Bitbucket → Personal settings → App passwords (repository, pull requests).", docs: "https://bitbucket.org/account/settings/app-passwords/" },
         };
         const m = meta[gitModal];
+        const oauthMode = gitModal === "github" && ghMethod === "oauth";
         return (
         <Modal title={`Conectar ${m.title}`} onClose={resetGit}
-          footer={<>
+          footer={oauthMode ? (
+            <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetGit}>Fechar</button>
+          ) : <>
             <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={resetGit}>Cancelar</button>
             <button style={{ ...btn, opacity: gitBusy || !gitToken.trim() || (gitModal === "bitbucket" && !gitUser.trim()) ? .6 : 1, pointerEvents: gitBusy || !gitToken.trim() || (gitModal === "bitbucket" && !gitUser.trim()) ? "none" : "auto" }} onClick={connectGit}>{gitBusy ? "Conectando…" : "Conectar"}</button>
           </>}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {gitModal === "github" && (
+              <div style={{ display: "flex", gap: 6, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 9, padding: 4 }}>
+                {([["oauth", "OAuth"], ["token", "Token"]] as [typeof ghMethod, string][]).map(([k, lbl]) => (
+                  <button key={k} onClick={() => { setGhMethod(k); setGitTest(null); }} style={{ flex: 1, height: 32, borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600, background: ghMethod === k ? "var(--card)" : "transparent", color: ghMethod === k ? "var(--ink)" : "var(--dim)" }}>{lbl}</button>
+                ))}
+              </div>
+            )}
+            {oauthMode ? (
+              !ghDevice ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 16, padding: "10px 8px 4px" }}>
+                  <div style={{ width: 52, height: 52, borderRadius: 13, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>
+                  </div>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto. Sem criar token manualmente.</span>
+                  {gitTest && !gitTest.ok && <span style={{ fontSize: 12, color: "var(--red)" }}>{gitTest.msg}</span>}
+                  <button style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 8, opacity: gitBusy ? .6 : 1, pointerEvents: gitBusy ? "none" : "auto" }} onClick={startGithubDevice}>{gitBusy ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)" }}>Em <a href={ghDevice.verification_uri} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>{ghDevice.verification_uri.replace("https://", "")}</a> digite o código:</span>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 26, fontWeight: 700, letterSpacing: 4, color: "var(--ink)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 20px" }}>{ghDevice.user_code}</div>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--mute)" }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>
+                    {ghStatus === "pending" ? "aguardando autorização no GitHub…" : ghStatus}
+                  </span>
+                </div>
+              )
+            ) : (<>
             {gitModal === "bitbucket" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Usuário Bitbucket</span>
@@ -899,6 +966,7 @@ export default function Config() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
               <span style={{ fontSize: 12, color: "var(--mute)", lineHeight: 1.5 }}>{m.help} <a href={m.docs} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>Abrir página de tokens →</a></span>
             </div>
+            </>)}
           </div>
         </Modal>
         );

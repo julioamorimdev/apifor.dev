@@ -10,8 +10,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"apifor.dev/cerebro/gen/apiforv1"
@@ -51,6 +53,21 @@ type API struct {
 	// AuthSidecarURL: base do sidecar que dirige o `claude setup-token` (OAuth
 	// da assinatura). Vazio = recurso indisponível (502 nas rotas claude/*).
 	AuthSidecarURL string
+	// GitHubOAuthClientID: client id p/ o device-flow do GitHub (default: o
+	// client público do gh CLI). Override via env GITHUB_OAUTH_CLIENT_ID.
+	GitHubOAuthClientID string
+	// device-flows do GitHub em andamento, por org.
+	ghMu    sync.Mutex
+	ghFlows map[string]*ghFlow
+}
+
+// ghFlow guarda o estado de um device-flow do GitHub p/ uma org.
+type ghFlow struct {
+	userCode  string
+	verifyURI string
+	status    string // pending | authorized | expired | denied | error
+	login     string
+	errMsg    string
 }
 
 // tokenTTL devolve a validade configurada ou o default (12h).
@@ -64,6 +81,12 @@ func (a *API) tokenTTL() time.Duration {
 func (a *API) Routes() http.Handler {
 	if a.metrics == nil {
 		a.metrics = &Metrics{}
+	}
+	if a.ghFlows == nil {
+		a.ghFlows = map[string]*ghFlow{}
+	}
+	if a.GitHubOAuthClientID == "" {
+		a.GitHubOAuthClientID = "Iv1.b507a08c87ecfe98" // client público do gh CLI
 	}
 	if a.rl == nil {
 		a.rl = newRateLimiter(a.DB)
@@ -101,6 +124,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/anthropic/test", a.anthropicTest) // POST valida API key
 	mux.HandleFunc("/v1/connections/git", a.gitConnect)               // POST conecta (valida+grava) / DELETE desconecta
 	mux.HandleFunc("/v1/connections/git/test", a.gitTest)             // POST valida token de código
+	mux.HandleFunc("/v1/connections/git/github/device", a.githubDeviceStart)  // POST inicia device-flow
+	mux.HandleFunc("/v1/connections/git/github/device/status", a.githubDeviceStatus) // GET status do device-flow
 	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
 	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
@@ -1139,6 +1164,133 @@ func (a *API) gitConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAudit(r, "connection.code.set", "connection", id)
 	writeJSON(w, 200, map[string]any{"ok": true, "who": who, "provider": in.Provider})
+}
+
+// githubDeviceStart inicia o OAuth device-flow do GitHub (igual `gh auth
+// login`): pede um device/user code e dispara o polling em background.
+func (a *API) githubDeviceStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	org := a.orgFrom(r)
+	form := url.Values{"client_id": {a.GitHubOAuthClientID}, "scope": {"repo workflow"}}
+	req, _ := http.NewRequestWithContext(r.Context(), "POST", "https://github.com/login/device/code", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, 502, errBody("unavailable", "falha ao contatar GitHub: "+err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+	var dc struct {
+		DeviceCode      string `json:"device_code"`
+		UserCode        string `json:"user_code"`
+		VerificationURI string `json:"verification_uri"`
+		ExpiresIn       int    `json:"expires_in"`
+		Interval        int    `json:"interval"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&dc)
+	if dc.DeviceCode == "" {
+		writeJSON(w, 502, errBody("unavailable", "GitHub não retornou device_code"))
+		return
+	}
+	if dc.Interval < 1 {
+		dc.Interval = 5
+	}
+	if dc.ExpiresIn < 1 {
+		dc.ExpiresIn = 900
+	}
+	a.ghMu.Lock()
+	a.ghFlows[org] = &ghFlow{userCode: dc.UserCode, verifyURI: dc.VerificationURI, status: "pending"}
+	a.ghMu.Unlock()
+	go a.pollGitHubDevice(org, dc.DeviceCode, dc.Interval, dc.ExpiresIn)
+	writeJSON(w, 200, map[string]any{
+		"user_code": dc.UserCode, "verification_uri": dc.VerificationURI,
+		"interval": dc.Interval, "expires_in": dc.ExpiresIn,
+	})
+}
+
+// pollGitHubDevice faz o polling do access_token até autorizar/expirar e, no
+// sucesso, valida o token e grava a conexão de código (provider github).
+func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int) {
+	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
+	set := func(status, login, errMsg string) {
+		a.ghMu.Lock()
+		if f := a.ghFlows[org]; f != nil {
+			f.status, f.login, f.errMsg = status, login, errMsg
+		}
+		a.ghMu.Unlock()
+	}
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Duration(interval) * time.Second)
+		form := url.Values{
+			"client_id":   {a.GitHubOAuthClientID},
+			"device_code": {deviceCode},
+			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+		}
+		req, _ := http.NewRequest("POST", "https://github.com/login/oauth/access_token", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			continue
+		}
+		var tok struct {
+			AccessToken string `json:"access_token"`
+			Error       string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&tok)
+		resp.Body.Close()
+		if tok.AccessToken != "" {
+			ok, login, _, _ := a.validateGitToken(context.Background(), "github", tok.AccessToken, "")
+			if ok {
+				if id, e := a.DB.SetCodeProvider(context.Background(), org, "github", login); e == nil {
+					_ = id
+				}
+				set("authorized", login, "")
+			} else {
+				set("error", "", "token recebido mas inválido")
+			}
+			return
+		}
+		switch tok.Error {
+		case "authorization_pending":
+			// segue aguardando
+		case "slow_down":
+			interval += 5
+		case "expired_token":
+			set("expired", "", "código expirou — tente de novo")
+			return
+		case "access_denied":
+			set("denied", "", "autorização negada")
+			return
+		}
+	}
+	set("expired", "", "tempo esgotado — tente de novo")
+}
+
+// githubDeviceStatus devolve o estado atual do device-flow da org.
+func (a *API) githubDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	org := a.orgFrom(r)
+	a.ghMu.Lock()
+	f := a.ghFlows[org]
+	a.ghMu.Unlock()
+	if f == nil {
+		writeJSON(w, 404, errBody("not_found", "nenhum fluxo em andamento"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"status": f.status, "login": f.login, "error": f.errMsg,
+		"user_code": f.userCode, "verification_uri": f.verifyURI,
+	})
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).
