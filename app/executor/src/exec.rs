@@ -18,9 +18,14 @@ pub struct Instr {
     pub target_files: Vec<String>,
     #[serde(default)]
     pub model: String, // M4.2: modelo do agente desta etapa (coder/reviewer)
+    #[serde(default = "default_true")]
+    pub open_pr: bool, // capability do worker: abrir PR (default true p/ compat)
 }
 fn default_branch() -> String {
     "main".into()
+}
+fn default_true() -> bool {
+    true
 }
 
 const FALLBACK_MODEL: &str = "claude-opus-4-8";
@@ -143,13 +148,19 @@ pub async fn run(task_id: &str, instr_json: &str, vault: &Vault) -> Result<ExecR
     git(&repo, &["push", "origin", &instr.branch])?;
     println!("exec: branch {} pushed ({summary})", instr.branch);
 
-    // 7. abre PR (GitHub API se houver token + remote github; senão registra o branch)
-    let url = match open_pr(&instr, &gh_token).await {
-        Ok(u) => u,
-        Err(e) => {
-            eprintln!("exec: PR via API falhou/indisponível ({e}); registrando branch local");
-            format!("local:{}#{}", instr.repo_url, instr.branch)
+    // 7. abre PR (GitHub API se houver token + remote github; senão registra o
+    // branch). Capability do worker pode desligar a abertura de PR.
+    let url = if instr.open_pr {
+        match open_pr(&instr, &gh_token).await {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("exec: PR via API falhou/indisponível ({e}); registrando branch local");
+                format!("local:{}#{}", instr.repo_url, instr.branch)
+            }
         }
+    } else {
+        println!("exec: abertura de PR desligada no worker; só push do branch");
+        format!("local:{}#{}", instr.repo_url, instr.branch)
     };
 
     Ok(ExecResult {

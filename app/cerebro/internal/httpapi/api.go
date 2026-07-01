@@ -164,8 +164,9 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/integration", a.integrationConnect)     // POST conecta CI/observabilidade / DELETE
 	mux.HandleFunc("/v1/connections/integration/test", a.integrationTest)   // POST valida credencial CI/observabilidade
 	mux.HandleFunc("/v1/connections/reuse", a.reuseConnection)              // POST reaproveita identidade (github/gitlab/bitbucket) em outra aba
-	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)      // GET lista / POST cria (manage)
-	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)  // DELETE {id} (manage)
+	mux.HandleFunc("/v1/pinned-workers", a.pinnedWorkers)          // GET lista / POST cria (manage)
+	mux.HandleFunc("/v1/pinned-workers/bulk", a.pinnedWorkersBulk) // POST liga/desliga todos (manage)
+	mux.HandleFunc("/v1/pinned-workers/", a.pinnedWorkerByID)      // PATCH/DELETE {id} (manage)
 	mux.HandleFunc("/v1/qa", a.qa)                             // GET qa_reports
 	mux.HandleFunc("/v1/telemetry", a.telemetry)               // GET agregado
 	mux.HandleFunc("/v1/usage", a.usage)           // GET uso vs limites do plano
@@ -2216,6 +2217,32 @@ func (a *API) pinnedWorkers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// pinnedWorkersBulk: POST /v1/pinned-workers/bulk {enabled} — liga/desliga TODOS
+// os workers dedicados da org de uma vez (kill switch global do modo pinned).
+func (a *API) pinnedWorkersBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, errBody("bad_request", err.Error()))
+		return
+	}
+	n, err := a.DB.SetAllPinnedEnabled(r.Context(), a.orgFrom(r), body.Enabled)
+	if err != nil {
+		writeJSON(w, 500, errBody("internal", err.Error()))
+		return
+	}
+	a.recordAudit(r, "pinned.bulk", "pinned_worker", fmt.Sprintf("enabled=%v n=%d", body.Enabled, n))
+	writeJSON(w, 200, map[string]any{"updated": n, "enabled": body.Enabled})
 }
 
 func (a *API) pinnedWorkerByID(w http.ResponseWriter, r *http.Request) {
