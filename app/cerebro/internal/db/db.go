@@ -350,24 +350,11 @@ func (d *DB) SetAIEngine(ctx context.Context, orgID, kind, provider, label strin
 	return id, err
 }
 
-// SetCodeProvider registra/atualiza uma conexão de código (GitHub, GitLab,
-// Bitbucket). Um por provider — substitui o anterior do mesmo provider.
-func (d *DB) SetCodeProvider(ctx context.Context, orgID, provider, label string) (string, error) {
-	id := NewID("con")
-	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		if _, e := tx.Exec(ctx, `DELETE FROM connection WHERE org_id=$1 AND type='code' AND provider=$2`, orgID, provider); e != nil {
-			return e
-		}
-		_, e := tx.Exec(ctx, `INSERT INTO connection(id,org_id,type,provider,label,status,settings)
-			VALUES($1,$2,'code',$3,$4,'ok','{}'::jsonb)`, id, orgID, provider, label)
-		return e
-	})
-	return id, err
-}
-
-// SetCodeProviderToken igual a SetCodeProvider, mas guarda o token (+username/
-// kind) em settings p/ listar os repositórios remotos da conta depois. O token
-// nunca volta p/ o cliente (ListConnections não devolve settings). kind: "token"|"oauth".
+// SetCodeProviderToken registra/atualiza uma conexão de código (GitHub, GitLab,
+// Bitbucket) guardando o token (+username/kind) em settings p/ listar os
+// repositórios remotos da conta e clonar depois. Um por provider — substitui o
+// anterior. O token nunca volta p/ o cliente (ListConnections não devolve
+// settings). kind: "token"|"oauth".
 func (d *DB) SetCodeProviderToken(ctx context.Context, orgID, provider, label, token, username, kind string) (string, error) {
 	id := NewID("con")
 	st, _ := json.Marshal(map[string]string{"token": token, "username": username, "kind": kind})
@@ -394,6 +381,31 @@ func (d *DB) GetCodeAuth(ctx context.Context, orgID, provider string) (token, us
 	var m map[string]string
 	_ = json.Unmarshal([]byte(st), &m)
 	return m["token"], m["username"], nil
+}
+
+// FindProviderToken devolve o token/username guardado em qualquer conexão dos
+// providers dados (ex.: a conexão de código do mesmo provider). Vazio se
+// nenhuma conexão da família tiver token — caso em que não há acesso a
+// repositórios p/ reaproveitar.
+func (d *DB) FindProviderToken(ctx context.Context, orgID string, providers []string) (token, username string) {
+	rows, err := d.Pool.Query(ctx, `SELECT COALESCE(settings::text,'{}') FROM connection
+		WHERE org_id=$1 AND provider = ANY($2) ORDER BY created_at DESC`, orgID, providers)
+	if err != nil {
+		return "", ""
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var st string
+		if rows.Scan(&st) != nil {
+			continue
+		}
+		var m map[string]string
+		_ = json.Unmarshal([]byte(st), &m)
+		if m["token"] != "" {
+			return m["token"], m["username"]
+		}
+	}
+	return "", ""
 }
 
 // DeleteCodeProvider remove a conexão de código de um provider.

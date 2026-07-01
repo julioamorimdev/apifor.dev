@@ -82,6 +82,15 @@ services:
       REST_TLS_HOSTS: "${REST_TLS_HOSTS:-}"
       # Sidecar que dirige o `claude setup-token` (OAuth assinatura Claude).
       AUTH_SIDECAR_URL: "http://auth-sidecar:8090"
+      # OAuth do GitHub p/ conectar fonte de código e listar repos (inclui os
+      # privados). Registre um OAuth App em github.com/settings/developers com
+      #   Authorization callback URL = ${PUBLIC_URL}/api/v1/connections/git/github/oauth/callback
+      # e ponha aqui o client id (20 hex, sem Iv1.) + o client secret. Com os
+      # dois, "Conectar" vira web-flow (clicar → autorizar → pronto). Sem secret,
+      # cai no device-flow (código colado) e, com o default gh CLI, os privados
+      # não aparecem (GitHub App ignora o scope repo).
+      GITHUB_OAUTH_CLIENT_ID: "${GITHUB_OAUTH_CLIENT_ID:-}"
+      GITHUB_OAUTH_CLIENT_SECRET: "${GITHUB_OAUTH_CLIENT_SECRET:-}"
     volumes:
       - cadata:/var/lib/cerebro       # CA própria persistente (mTLS)
     depends_on:
