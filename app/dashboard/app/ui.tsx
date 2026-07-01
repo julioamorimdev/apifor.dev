@@ -951,7 +951,13 @@ export async function apiDelete<T = any>(p: string): Promise<T> {
 export function usePoll<T = any>(path: string, ms = 2000) {
   const [data, setData] = useState<T | null>(null);
   const reload = useCallback(() => {
-    apiGet<{ data: T }>(path).then((r) => setData((r as any).data ?? null)).catch(() => {});
+    // Um poll que falha (429/timeout/blip) devolve {} via safeJson, sem `data`.
+    // Nesse caso mantém o último valor bom — apagar (setData(null)) fazia as
+    // conexões piscarem "desconectado" até a janela de rate limit resetar.
+    apiGet<{ data: T }>(path).then((r) => {
+      const d = (r as any).data;
+      if (d !== undefined) setData(d);
+    }).catch(() => {});
   }, [path]);
   useEffect(() => { reload(); const tm = setInterval(reload, ms); return () => clearInterval(tm); }, [reload, ms]);
   return { data, reload };

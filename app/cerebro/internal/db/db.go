@@ -276,7 +276,9 @@ func (d *DB) PoolMode(ctx context.Context, orgID string) string {
 }
 
 // ── pinned workers (modo dedicado) ──
-func (d *DB) CreatePinnedWorker(ctx context.Context, orgID, focus, repoID, model string, concurrency int) (string, error) {
+// settings guarda: model, rules (instruções), enabled (liga/desliga) e as
+// capabilities cap_open_pr / cap_run_tests / cap_auto_merge.
+func (d *DB) CreatePinnedWorker(ctx context.Context, orgID, focus, repoID string, concurrency int, settings map[string]any) (string, error) {
 	wsp := d.FirstWorkspace(ctx, orgID)
 	id := NewID("pwk")
 	var rid *string
@@ -286,7 +288,7 @@ func (d *DB) CreatePinnedWorker(ctx context.Context, orgID, focus, repoID, model
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	st, _ := json.Marshal(map[string]string{"model": model})
+	st, _ := json.Marshal(settings)
 	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `INSERT INTO pinned_worker(id,org_id,workspace_id,repo_id,focus,concurrency,settings)
 			VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, id, orgID, wsp, rid, focus, concurrency, string(st))
@@ -295,11 +297,65 @@ func (d *DB) CreatePinnedWorker(ctx context.Context, orgID, focus, repoID, model
 	return id, err
 }
 
+// UpdatePinnedWorker altera foco, repo, concorrência e settings de um worker.
+func (d *DB) UpdatePinnedWorker(ctx context.Context, orgID, id, focus, repoID string, concurrency int, settings map[string]any) error {
+	var rid *string
+	if repoID != "" {
+		rid = &repoID
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	st, _ := json.Marshal(settings)
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE pinned_worker SET focus=$3, repo_id=$4, concurrency=$5, settings=$6::jsonb
+			WHERE id=$2 AND org_id=$1`, orgID, id, focus, rid, concurrency, string(st))
+		if e == nil && ct.RowsAffected() == 0 {
+			return errors.New("worker não encontrado")
+		}
+		return e
+	})
+}
+
 func (d *DB) ListPinnedWorkers(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT p.id, COALESCE(p.focus,'') AS focus, COALESCE(p.repo_id,'') AS repo_id,
-		COALESCE(r.name,'') AS repo_name, p.concurrency, COALESCE(p.settings->>'model','claude_opus') AS model
+		COALESCE(r.name,'') AS repo_name, p.concurrency, COALESCE(p.settings->>'model','claude_opus') AS model,
+		COALESCE(p.settings->>'rules','') AS rules,
+		COALESCE((p.settings->>'enabled')::bool, true) AS enabled,
+		COALESCE((p.settings->>'cap_open_pr')::bool, true) AS cap_open_pr,
+		COALESCE((p.settings->>'cap_run_tests')::bool, true) AS cap_run_tests,
+		COALESCE((p.settings->>'cap_auto_merge')::bool, false) AS cap_auto_merge
 		FROM pinned_worker p LEFT JOIN repository r ON r.id=p.repo_id
 		WHERE ($1='' OR p.workspace_id=$1) ORDER BY p.created_at DESC`, wspID)
+}
+
+// PinnedRepoCfg — config do worker dedicado a um repo (p/ enforcement no plano
+// e nos gates do pipeline).
+type PinnedRepoCfg struct {
+	Rules     string
+	Enabled   bool
+	OpenPR    bool
+	RunTests  bool
+	AutoMerge bool
+}
+
+// PinnedWorkerForRepo devolve a config do worker preso ao repo (ok=false se não
+// houver). Usado p/ injetar regras no plano e gatear testes/merge.
+func (d *DB) PinnedWorkerForRepo(ctx context.Context, orgID, repoID string) (cfg PinnedRepoCfg, ok bool) {
+	if repoID == "" {
+		return PinnedRepoCfg{}, false
+	}
+	e := d.Pool.QueryRow(ctx, `SELECT COALESCE(settings->>'rules',''),
+		COALESCE((settings->>'enabled')::bool,true),
+		COALESCE((settings->>'cap_open_pr')::bool,true),
+		COALESCE((settings->>'cap_run_tests')::bool,true),
+		COALESCE((settings->>'cap_auto_merge')::bool,false)
+		FROM pinned_worker WHERE org_id=$1 AND repo_id=$2 ORDER BY created_at DESC LIMIT 1`, orgID, repoID).
+		Scan(&cfg.Rules, &cfg.Enabled, &cfg.OpenPR, &cfg.RunTests, &cfg.AutoMerge)
+	if e != nil {
+		return PinnedRepoCfg{}, false
+	}
+	return cfg, true
 }
 
 func (d *DB) DeletePinnedWorker(ctx context.Context, orgID, id string) error {
@@ -309,11 +365,13 @@ func (d *DB) DeletePinnedWorker(ctx context.Context, orgID, id string) error {
 	})
 }
 
-// PinnedConcurrency — soma da concorrência dos workers pinned (cap em modo pinned).
+// PinnedConcurrency — soma da concorrência dos workers pinned ATIVOS (cap em
+// modo pinned). Workers desligados (enabled=false) não contam.
 func (d *DB) PinnedConcurrency(ctx context.Context, orgID string) int {
 	var n int
 	wsp := d.FirstWorkspace(ctx, orgID)
-	_ = d.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(concurrency),0) FROM pinned_worker WHERE workspace_id=$1`, wsp).Scan(&n)
+	_ = d.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(concurrency),0) FROM pinned_worker
+		WHERE workspace_id=$1 AND COALESCE((settings->>'enabled')::bool, true)`, wsp).Scan(&n)
 	return n
 }
 
@@ -963,6 +1021,28 @@ func (d *DB) CreateRepoFrom(ctx context.Context, orgID, wspID, name, cloneURL, d
 func (d *DB) ListRepos(ctx context.Context, orgID, wspID string) ([]Row, error) {
 	return d.orgList(ctx, orgID, `SELECT id,name,default_branch,
 		COALESCE(settings->>'clone_url','') AS clone_url FROM repository WHERE ($1='' OR workspace_id=$1) ORDER BY created_at DESC`, wspID)
+}
+
+// UpdateRepo altera nome e branch padrão de um repositório.
+func (d *DB) UpdateRepo(ctx context.Context, orgID, repoID, name, defaultBranch string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE repository SET name=$3, default_branch=$4 WHERE org_id=$1 AND id=$2`, orgID, repoID, name, defaultBranch)
+		if e == nil && ct.RowsAffected() == 0 {
+			return errors.New("repositório não encontrado")
+		}
+		return e
+	})
+}
+
+// DeleteRepo remove o registro do repositório (não apaga a pasta local).
+func (d *DB) DeleteRepo(ctx context.Context, orgID, repoID string) error {
+	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `DELETE FROM repository WHERE org_id=$1 AND id=$2`, orgID, repoID)
+		if e == nil && ct.RowsAffected() == 0 {
+			return errors.New("repositório não encontrado")
+		}
+		return e
+	})
 }
 
 // TaskRepo é o repo associado a uma tarefa (vazio se não houver).

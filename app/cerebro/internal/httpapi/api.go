@@ -153,6 +153,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/git", a.gitConnect)               // POST conecta (valida+grava) / DELETE desconecta
 	mux.HandleFunc("/v1/connections/git/test", a.gitTest)             // POST valida token de código
 	mux.HandleFunc("/v1/connections/code/repos", a.codeRemoteRepos)   // GET lista repositórios remotos da conta conectada
+	mux.HandleFunc("/v1/repos/clone-url", a.codeCloneURL)             // POST devolve clone-url autenticada (clone local no desktop)
+	mux.HandleFunc("/v1/repos/", a.repoByID)                          // PATCH/DELETE /v1/repos/{id} — edita/remove repositório
 	mux.HandleFunc("/v1/connections/git/github/device", a.githubDeviceStart)  // POST inicia device-flow
 	mux.HandleFunc("/v1/connections/git/github/device/status", a.githubDeviceStatus) // GET status do device-flow
 	mux.HandleFunc("/v1/connections/git/github/oauth/start", a.githubOAuthStart)       // POST inicia web-flow -> {url}
@@ -530,6 +532,11 @@ func (a *API) createAndPlan(ctx context.Context, org, title, prompt string, refs
 	if nMem > 0 {
 		log.Printf("memória: %d instrução(ões) injetada(s) no plano de task=%s", nMem, taskID)
 	}
+	// Regras do worker dedicado do repo entram como diretrizes no plano.
+	if cfg, ok := a.DB.PinnedWorkerForRepo(ctx, org, repoID); ok && cfg.Rules != "" {
+		planPrompt += "\n\nRegras do worker (siga estritamente):\n" + cfg.Rules
+		log.Printf("pinned: regras do worker injetadas no plano de task=%s", taskID)
+	}
 	env := &apiforv1.Envelope{
 		Type: apiforv1.MsgType_REQUEST_PLAN,
 		Payload: &apiforv1.Envelope_RequestPlan{RequestPlan: &apiforv1.RequestPlan{
@@ -625,6 +632,52 @@ func (a *API) repos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"data": rows})
+}
+
+// repoByID: /v1/repos/{id} — PATCH/POST edita (nome, branch); DELETE remove o
+// registro (não apaga a pasta local). O clone-url tem rota própria mais
+// específica, então não cai aqui.
+func (a *API) repoByID(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/repos/")
+	if id == "" || strings.Contains(id, "/") {
+		writeJSON(w, 404, errBody("not_found", "repositório inválido"))
+		return
+	}
+	org := a.orgFrom(r)
+	switch r.Method {
+	case http.MethodDelete:
+		if err := a.DB.DeleteRepo(r.Context(), org, id); err != nil {
+			writeJSON(w, 409, errBody("conflict", "não foi possível excluir: "+err.Error()))
+			return
+		}
+		a.recordAudit(r, "repo.delete", "repository", id)
+		writeJSON(w, 200, map[string]any{"ok": true})
+	case http.MethodPatch, http.MethodPost, http.MethodPut:
+		var in struct {
+			Name          string `json:"name"`
+			DefaultBranch string `json:"default_branch"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		in.Name = strings.TrimSpace(in.Name)
+		if in.Name == "" {
+			writeJSON(w, 400, errBody("bad_request", "nome obrigatório"))
+			return
+		}
+		if strings.TrimSpace(in.DefaultBranch) == "" {
+			in.DefaultBranch = "main"
+		}
+		if err := a.DB.UpdateRepo(r.Context(), org, id, in.Name, strings.TrimSpace(in.DefaultBranch)); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "repo.update", "repository", id)
+		writeJSON(w, 200, map[string]any{"ok": true})
+	default:
+		writeJSON(w, 405, errBody("method", "use PATCH ou DELETE"))
+	}
 }
 
 // prs: GET lista os pull requests abertos pelo executor.
@@ -1329,6 +1382,59 @@ func (a *API) codeRemoteRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"repos": repos})
+}
+
+// authedCloneURL injeta o token na URL https p/ clonar repositório privado.
+// Espelha a lógica do executor (authed_url). Só mexe em URLs https conhecidas.
+func authedCloneURL(provider, cloneURL, token, username string) string {
+	if token == "" || !strings.HasPrefix(cloneURL, "https://") {
+		return cloneURL
+	}
+	var cred string
+	switch provider {
+	case "github":
+		cred = "x-access-token:" + token
+	case "gitlab":
+		cred = "oauth2:" + token
+	case "bitbucket":
+		u := username
+		if u == "" {
+			u = "x-token-auth"
+		}
+		cred = u + ":" + token
+	default:
+		return cloneURL
+	}
+	return strings.Replace(cloneURL, "https://", "https://"+cred+"@", 1)
+}
+
+// codeCloneURL: POST /v1/repos/clone-url {provider, clone_url} — devolve uma
+// URL de clone autenticada (token embutido) p/ o app desktop clonar localmente
+// repositórios privados. Token nunca é logado; use apenas em cliente confiável.
+func (a *API) codeCloneURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	var in struct {
+		Provider string `json:"provider"`
+		CloneURL string `json:"clone_url"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if _, ok := providerLabels[in.Provider]; !ok || strings.TrimSpace(in.CloneURL) == "" {
+		writeJSON(w, 400, errBody("bad_request", "provider e clone_url obrigatórios"))
+		return
+	}
+	org := a.orgFrom(r)
+	token, username, err := a.DB.GetCodeAuth(r.Context(), org, in.Provider)
+	if err != nil || token == "" {
+		writeJSON(w, 409, errBody("no_token", "reconecte esta fonte de código (em Conexões → Código)"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"url": authedCloneURL(in.Provider, strings.TrimSpace(in.CloneURL), token, username)})
 }
 
 // githubDeviceStart inicia o OAuth device-flow do GitHub (igual `gh auth
@@ -2045,26 +2151,57 @@ func (a *API) reuseConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 // pinnedWorkers: GET lista; POST cria worker dedicado (modo pinned).
+// pinnedWorkerBody é o corpo de create/update de um worker dedicado.
+type pinnedWorkerBody struct {
+	Focus        string `json:"focus"`
+	RepoID       string `json:"repo_id"`
+	Model        string `json:"model"`
+	Concurrency  int    `json:"concurrency"`
+	Rules        string `json:"rules"`
+	Enabled      *bool  `json:"enabled"` // ponteiro: ausente = true (default)
+	Capabilities struct {
+		OpenPR    *bool `json:"open_pr"`
+		RunTests  *bool `json:"run_tests"`
+		AutoMerge *bool `json:"auto_merge"`
+	} `json:"capabilities"`
+}
+
+// boolOr resolve um *bool com default.
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// pinnedSettings monta o settings jsonb a partir do corpo (defaults sensatos).
+func pinnedSettings(b pinnedWorkerBody) map[string]any {
+	model := b.Model
+	if model == "" {
+		model = "claude_opus"
+	}
+	return map[string]any{
+		"model":          model,
+		"rules":          strings.TrimSpace(b.Rules),
+		"enabled":        boolOr(b.Enabled, true),
+		"cap_open_pr":    boolOr(b.Capabilities.OpenPR, true),
+		"cap_run_tests":  boolOr(b.Capabilities.RunTests, true),
+		"cap_auto_merge": boolOr(b.Capabilities.AutoMerge, false),
+	}
+}
+
 func (a *API) pinnedWorkers(w http.ResponseWriter, r *http.Request) {
 	org := a.orgFrom(r)
 	if r.Method == http.MethodPost {
 		if !a.requireCap(w, r, "manage") {
 			return
 		}
-		var body struct {
-			Focus       string `json:"focus"`
-			RepoID      string `json:"repo_id"`
-			Model       string `json:"model"`
-			Concurrency int    `json:"concurrency"`
-		}
+		var body pinnedWorkerBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, 400, errBody("bad_request", err.Error()))
 			return
 		}
-		if body.Model == "" {
-			body.Model = "claude_opus"
-		}
-		id, err := a.DB.CreatePinnedWorker(r.Context(), org, body.Focus, body.RepoID, body.Model, body.Concurrency)
+		id, err := a.DB.CreatePinnedWorker(r.Context(), org, body.Focus, body.RepoID, body.Concurrency, pinnedSettings(body))
 		if err != nil {
 			writeJSON(w, 500, errBody("internal", err.Error()))
 			return
@@ -2083,19 +2220,37 @@ func (a *API) pinnedWorkers(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) pinnedWorkerByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/pinned-workers/")
-	if id == "" || r.Method != http.MethodDelete {
-		writeJSON(w, 404, errBody("not_found", "use DELETE /v1/pinned-workers/{id}"))
+	if id == "" || strings.Contains(id, "/") {
+		writeJSON(w, 404, errBody("not_found", "worker inválido"))
 		return
 	}
 	if !a.requireCap(w, r, "manage") {
 		return
 	}
-	if err := a.DB.DeletePinnedWorker(r.Context(), a.orgFrom(r), id); err != nil {
-		writeJSON(w, 500, errBody("internal", err.Error()))
-		return
+	org := a.orgFrom(r)
+	switch r.Method {
+	case http.MethodDelete:
+		if err := a.DB.DeletePinnedWorker(r.Context(), org, id); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "pinned.delete", "pinned_worker", id)
+		writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
+	case http.MethodPatch, http.MethodPost, http.MethodPut:
+		var body pinnedWorkerBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, 400, errBody("bad_request", err.Error()))
+			return
+		}
+		if err := a.DB.UpdatePinnedWorker(r.Context(), org, id, body.Focus, body.RepoID, body.Concurrency, pinnedSettings(body)); err != nil {
+			writeJSON(w, 500, errBody("internal", err.Error()))
+			return
+		}
+		a.recordAudit(r, "pinned.update", "pinned_worker", id)
+		writeJSON(w, 200, map[string]any{"id": id, "updated": true})
+	default:
+		writeJSON(w, 405, errBody("method", "use PATCH ou DELETE"))
 	}
-	a.recordAudit(r, "pinned.delete", "pinned_worker", id)
-	writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
 }
 
 func (a *API) qa(w http.ResponseWriter, r *http.Request) {

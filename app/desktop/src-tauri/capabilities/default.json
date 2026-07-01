@@ -5,8 +5,15 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "shell:allow-execute",
     "shell:allow-spawn",
-    "updater:default"
+    "shell:allow-open",
+    "updater:default",
+    "dialog:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        { "name": "git", "cmd": "git", "args": true }
+      ]
+    }
   ]
 }

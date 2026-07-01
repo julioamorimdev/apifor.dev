@@ -242,6 +242,13 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 		_ = s.DB.SaveExecResult(ctx, taskID, r.Branch, r.Url) // PR aberto
 		s.DB.RecordStepOutput(ctx, taskID, "exec", "done", "PR "+r.Branch)
 		s.DB.CreateNotification(ctx, org, "pr", "PR aberto", "branch "+r.Branch, "/prs")
+		// capability do worker: pode desligar a etapa de testes p/ este repo.
+		if cfg, ok := s.DB.PinnedWorkerForRepo(ctx, org, s.taskRepoID(ctx, taskID)); ok && !cfg.RunTests {
+			s.DB.RecordStepOutput(ctx, taskID, "test", "skipped", "testes desligados no worker")
+			log.Printf("pipeline: testes pulados (worker) task=%s -> review", taskID)
+			s.dispatchStep(ctx, taskID, apiforv1.StepKind_REVIEW, s.DB.GetAgentModel(ctx, "reviewer"))
+			return
+		}
 		log.Printf("pipeline: PR criado task=%s branch=%s -> test", taskID, r.Branch)
 		s.dispatchStep(ctx, taskID, apiforv1.StepKind_TEST, "")
 	case "test":
@@ -283,13 +290,27 @@ func (s *Server) advancePipeline(ctx context.Context, taskID string, r stepResul
 	}
 }
 
-// mergeGate: exige revisão humana antes do merge, a menos que o pool da org esteja
-// com auto-merge ligado (Configuração → Workers).
+// taskRepoID devolve o repo_id da tarefa (vazio se não houver).
+func (s *Server) taskRepoID(ctx context.Context, taskID string) string {
+	tr, err := s.DB.GetTaskRepo(ctx, taskID)
+	if err != nil || tr == nil {
+		return ""
+	}
+	return tr.RepoID
+}
+
+// mergeGate: exige revisão humana antes do merge. Um worker dedicado com
+// auto-merge DESLIGADO força revisão humana p/ o repo dele, independentemente do
+// pool. Caso contrário, segue o pool da org (Configuração → Workers).
 func (s *Server) mergeGate(ctx context.Context, taskID string) bool {
+	org := s.taskOrg(ctx, taskID)
+	if cfg, ok := s.DB.PinnedWorkerForRepo(ctx, org, s.taskRepoID(ctx, taskID)); ok && !cfg.AutoMerge {
+		return true // worker não permite auto-merge -> exige humano
+	}
 	if !s.MergeRequireHuman {
 		return false
 	}
-	return !s.DB.PoolAutoMerge(ctx, s.taskOrg(ctx, taskID))
+	return !s.DB.PoolAutoMerge(ctx, org)
 }
 
 // coderModel escolhe o modelo do passo de código: em modo "pinned", usa o modelo
