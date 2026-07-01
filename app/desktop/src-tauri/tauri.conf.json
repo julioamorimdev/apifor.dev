@@ -24,8 +24,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
-    "externalBin": ["bin/apifor-executor"],
+    "icon": ["icons/icon.png"],
     "shortDescription": "Orquestrador de workers de IA que escrevem código",
     "longDescription": "apifor.dev — fila de tarefas, workers locais, PR, CI/QA, merge. Chaves e código nunca saem da sua máquina."
   },

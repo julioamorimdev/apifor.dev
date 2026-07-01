@@ -11,17 +11,23 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // sobe o executor local como sidecar (serviço de fundo dentro do app)
-            let sidecar = app.shell().sidecar("apifor-executor")?;
-            let (mut rx, _child) = sidecar.spawn()?;
-            tauri::async_runtime::spawn(async move {
-                while let Some(ev) = rx.recv().await {
-                    if let CommandEvent::Stderr(line) | CommandEvent::Stdout(line) = ev {
-                        eprintln!("[executor] {}", String::from_utf8_lossy(&line));
-                    }
+            // sobe o executor local como sidecar (serviço de fundo dentro do app).
+            // best-effort: se o binário não existir (ex.: `tauri dev` sem build do
+            // executor), apenas loga e segue — a GUI ainda abre.
+            match app.shell().sidecar("apifor-executor").and_then(|s| s.spawn()) {
+                Ok((mut rx, _child)) => {
+                    tauri::async_runtime::spawn(async move {
+                        while let Some(ev) = rx.recv().await {
+                            if let CommandEvent::Stderr(line) | CommandEvent::Stdout(line) = ev {
+                                eprintln!("[executor] {}", String::from_utf8_lossy(&line));
+                            }
+                        }
+                    });
                 }
-            });
+                Err(e) => eprintln!("[desktop] sidecar apifor-executor indisponível ({e}); seguindo sem ele"),
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

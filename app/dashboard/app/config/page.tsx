@@ -6,7 +6,7 @@ type Repo    = { id: string; name: string; default_branch: string; clone_url: st
 type Secret  = { id: string; name: string; type: string; fingerprint: string; location: string };
 type Conn    = { id: string; type: string; provider: string; label: string; status: string; created: string };
 type Pool    = { mode: string; parallel_workers: number; timeout_min: number; retries: number; paused: boolean; auto_merge: boolean; isolamento: boolean };
-type PinnedW = { id: string; focus: string; repo_id: string; repo_name: string; concurrency: number; model: string };
+type PinnedW = { id: string; focus: string; repo_id: string; repo_name: string; concurrency: number; model: string; rules?: string; enabled?: boolean; cap_open_pr?: boolean; cap_run_tests?: boolean; cap_auto_merge?: boolean };
 
 const MODELS = ["claude_opus", "claude_sonnet", "claude_haiku"];
 const MODEL_LABELS: Record<string, string> = { claude_opus: "Claude Opus 4.8", claude_sonnet: "Claude Sonnet 4.6", claude_haiku: "Claude Haiku 4.5" };
@@ -150,8 +150,17 @@ export default function Config() {
   const [repoSel, setRepoSel]         = useState<RemoteRepo | null>(null);
   const [repoDir, setRepoDir]         = useState("");
   const [repoSaving, setRepoSaving]   = useState(false);
+  const [isTauri, setIsTauri]         = useState(false);
+  const [repoEdit, setRepoEdit]       = useState<Repo | null>(null);
+  const [editName, setEditName]       = useState("");
+  const [editBranch, setEditBranch]   = useState("");
+  const [editBusy, setEditBusy]       = useState(false);
+  const [repoDel, setRepoDel]         = useState<Repo | null>(null);
+  const [delBusy, setDelBusy]         = useState(false);
   const [pwOpen, setPwOpen]     = useState(false);
-  const [pw, setPw]             = useState({ focus: "backend", repo_id: "", model: "claude_opus", concurrency: 1 });
+  const [pwEditId, setPwEditId] = useState<string | null>(null);
+  const [pwBusy, setPwBusy]     = useState(false);
+  const [pw, setPw]             = useState({ focus: "backend", repo_id: "", model: "claude_opus", concurrency: 1, rules: "", enabled: true, cap_open_pr: true, cap_run_tests: true, cap_auto_merge: false });
   const [iaModal, setIaModal]   = useState<"subscription" | "api" | null>(null);
   const [iaApiKey, setIaApiKey] = useState("");
   const [iaBusy, setIaBusy]     = useState(false);
@@ -189,7 +198,7 @@ export default function Config() {
       const r = await apiPost<{ url?: string; error?: { message?: string } }>("/v1/connections/claude/start", {});
       if (!r?.url) throw new Error(r?.error?.message || "falha ao iniciar autorização");
       setIaUrl(r.url); setIaStep("await_code");
-      window.open(r.url, "_blank", "noopener,noreferrer");
+      await openExternal(r.url);
     } catch (e) {
       setIaErr(e instanceof Error ? e.message : "falha ao iniciar autorização");
     } finally { setIaBusy(false); }
@@ -233,6 +242,16 @@ export default function Config() {
 
   function stopGhPoll() { if (ghPoll.current) { clearInterval(ghPoll.current); ghPoll.current = null; } }
 
+  // abre URL externa. No desktop (Tauri) o window.open do webview não abre o
+  // browser do sistema — usa o shell nativo. No navegador, window.open normal.
+  async function openExternal(url: string) {
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      try { const { open } = await import("@tauri-apps/plugin-shell"); await open(url); return; }
+      catch { /* cai no window.open */ }
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   function resetGit() {
     stopGhPoll();
     setGitModal(null); setGitToken(""); setGitUser("");
@@ -266,7 +285,7 @@ export default function Config() {
       const w = await apiPost<{ url?: string; error?: { code?: string; message?: string } }>("/v1/connections/git/github/oauth/start", { purpose });
       if (w?.url) {
         setGhStatus("pending");
-        window.open(w.url, "_blank", "noopener,noreferrer");
+        await openExternal(w.url);
         pollGhStatus(2000);
         return;
       }
@@ -276,7 +295,7 @@ export default function Config() {
       if (!r?.user_code || !r?.verification_uri) throw new Error(r?.error?.message || "falha ao iniciar OAuth");
       setGhDevice({ user_code: r.user_code, verification_uri: r.verification_uri });
       setGhStatus("pending");
-      window.open(r.verification_uri, "_blank", "noopener,noreferrer");
+      await openExternal(r.verification_uri);
       pollGhStatus(Math.max(2, r.interval || 5) * 1000);
     } catch (e) {
       setGhErr(e instanceof Error ? e.message : "falha ao iniciar OAuth");
@@ -482,6 +501,24 @@ export default function Config() {
     setRepoDir(`~/apifor/${leaf}`);
     setRepoStep("dir");
   }
+  // clona o repo na pasta escolhida, no app desktop (git via shell do Tauri).
+  // Usa uma clone-url autenticada do cerebro p/ repos privados. Devolve msg de
+  // erro (string) ou "" em sucesso. Só roda no desktop.
+  async function cloneToLocal(provider: string, cloneUrl: string, dir: string): Promise<string> {
+    try {
+      const auth = await apiPost<{ url?: string }>("/v1/repos/clone-url", { provider, clone_url: cloneUrl });
+      const url = auth?.url || cloneUrl;
+      let target = dir.trim();
+      if (target.startsWith("~")) {
+        const { homeDir } = await import("@tauri-apps/api/path");
+        target = (await homeDir()).replace(/\/$/, "") + target.slice(1);
+      }
+      const { Command } = await import("@tauri-apps/plugin-shell");
+      const out = await Command.create("git", ["clone", url, target]).execute();
+      if (out.code === 0) return "";
+      return out.stderr?.trim() || `git saiu com código ${out.code}`;
+    } catch (e) { return e instanceof Error ? e.message : "falha ao clonar"; }
+  }
   async function saveRepo() {
     if (!repoSel) return;
     setRepoSaving(true);
@@ -491,12 +528,89 @@ export default function Config() {
         name: leaf, clone_url: repoSel.clone_url, default_branch: repoSel.default_branch || "main",
         provider: repoProv, local_dir: repoDir.trim(),
       });
+      // no desktop, clona de fato na pasta escolhida.
+      if (isTauri && repoDir.trim()) {
+        const err = await cloneToLocal(repoProv, repoSel.clone_url, repoDir);
+        if (err) toast("repo cadastrado, mas o clone falhou: " + err, "error");
+        else toast("repositório clonado em " + repoDir.trim(), "success");
+      }
       setRepoOpen(false); reload();
     } finally { setRepoSaving(false); }
   }
-  async function addPinned() {
-    await apiPost("/v1/pinned-workers", pw);
-    setPwOpen(false); reloadPinned();
+  function openRepoEdit(rx: Repo) { setRepoEdit(rx); setEditName(rx.name); setEditBranch(rx.default_branch || "main"); }
+  async function saveRepoEdit() {
+    if (!repoEdit || !editName.trim()) return;
+    setEditBusy(true);
+    try {
+      const r = await apiPost<{ ok?: boolean; error?: { message?: string } }>(`/v1/repos/${repoEdit.id}`, { name: editName.trim(), default_branch: editBranch.trim() || "main" });
+      if (r?.error) { toast(r.error.message || "falha ao salvar", "error"); return; }
+      toast("repositório atualizado", "success"); setRepoEdit(null); reload();
+    } catch (e) { toast(e instanceof Error ? e.message : "falha ao salvar", "error"); }
+    finally { setEditBusy(false); }
+  }
+  async function confirmDelRepo() {
+    if (!repoDel) return;
+    setDelBusy(true);
+    try {
+      const r = await apiDelete<{ ok?: boolean; error?: { message?: string } }>(`/v1/repos/${repoDel.id}`);
+      if (r?.error) { toast(r.error.message || "falha ao excluir", "error"); return; }
+      toast("repositório removido", "success"); setRepoDel(null); reload();
+    } catch (e) { toast(e instanceof Error ? e.message : "falha ao excluir", "error"); }
+    finally { setDelBusy(false); }
+  }
+  // detecta app desktop (Tauri v2) p/ habilitar o seletor de pasta nativo.
+  useEffect(() => { setIsTauri(typeof window !== "undefined" && "__TAURI_INTERNALS__" in window); }, []);
+  // abre o diálogo nativo de pasta (só no desktop) e preenche o caminho. No
+  // browser não há acesso ao FS local (e o clone é na máquina do worker), então
+  // orienta o usuário a digitar.
+  async function pickLocalDir() {
+    if (!isTauri) { toast("Seleção de pasta disponível no app desktop — digite o caminho.", "info"); return; }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const sel = await open({ directory: true, multiple: false, title: "Escolha a pasta para clonar", defaultPath: repoDir || undefined });
+      if (typeof sel === "string" && sel) setRepoDir(sel);
+    } catch { toast("não foi possível abrir o seletor de pasta", "error"); }
+  }
+  function pwBody(x: typeof pw) {
+    return {
+      focus: x.focus, repo_id: x.repo_id, model: x.model, concurrency: x.concurrency,
+      rules: x.rules, enabled: x.enabled,
+      capabilities: { open_pr: x.cap_open_pr, run_tests: x.cap_run_tests, auto_merge: x.cap_auto_merge },
+    };
+  }
+  function openPwCreate() {
+    setPwEditId(null);
+    setPw({ focus: "backend", repo_id: "", model: "claude_opus", concurrency: 1, rules: "", enabled: true, cap_open_pr: true, cap_run_tests: true, cap_auto_merge: false });
+    setPwOpen(true);
+  }
+  function openPwEdit(p: PinnedW) {
+    setPwEditId(p.id);
+    setPw({
+      focus: p.focus || "", repo_id: p.repo_id || "", model: p.model || "claude_opus", concurrency: p.concurrency || 1,
+      rules: p.rules || "", enabled: p.enabled !== false,
+      cap_open_pr: p.cap_open_pr !== false, cap_run_tests: p.cap_run_tests !== false, cap_auto_merge: !!p.cap_auto_merge,
+    });
+    setPwOpen(true);
+  }
+  async function savePw() {
+    setPwBusy(true);
+    try {
+      if (pwEditId) await apiPost(`/v1/pinned-workers/${pwEditId}`, pwBody(pw));
+      else await apiPost("/v1/pinned-workers", pwBody(pw));
+      toast(pwEditId ? "worker atualizado" : "worker criado", "success");
+      setPwOpen(false); reloadPinned();
+    } catch (e) { toast(e instanceof Error ? e.message : "falha ao salvar", "error"); }
+    finally { setPwBusy(false); }
+  }
+  async function togglePinned(p: PinnedW) {
+    const next = p.enabled === false;
+    await apiPost(`/v1/pinned-workers/${p.id}`, {
+      focus: p.focus, repo_id: p.repo_id, model: p.model, concurrency: p.concurrency,
+      rules: p.rules || "", enabled: next,
+      capabilities: { open_pr: p.cap_open_pr !== false, run_tests: p.cap_run_tests !== false, auto_merge: !!p.cap_auto_merge },
+    });
+    toast(next ? "worker ligado" : "worker desligado", "success");
+    reloadPinned();
   }
   async function delPinned(id: string) { await apiDelete(`/v1/pinned-workers/${id}`); reloadPinned(); }
 
@@ -734,7 +848,7 @@ export default function Config() {
                   <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>Workers dedicados</span>
                   <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--mute)" }}>{pinnedList.length} / 8</span>
                 </div>
-                <button style={sFilledBtn} disabled={pinnedList.length >= 8} onClick={() => setPwOpen(true)}>
+                <button style={sFilledBtn} disabled={pinnedList.length >= 8} onClick={openPwCreate}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
                   Adicionar worker
                 </button>
@@ -748,11 +862,16 @@ export default function Config() {
               )}
 
               {pinnedList.map((p) => {
-                const isActive    = !running;
-                const pillColor   = isActive ? "var(--green)" : "var(--mute)";
-                const pillBg      = isActive ? "var(--green-tint)" : "var(--border)";
+                const on          = p.enabled !== false;
+                const pillColor   = on ? "var(--green)" : "var(--mute)";
+                const pillBg      = on ? "var(--green-tint)" : "var(--border)";
+                const caps = [
+                  ["Abrir PR" + (p.cap_open_pr !== false ? " (em breve)" : ""), p.cap_open_pr !== false],
+                  ["Rodar testes", p.cap_run_tests !== false],
+                  ["Auto-merge", !!p.cap_auto_merge],
+                ] as [string, boolean][];
                 return (
-                  <div key={p.id} style={{ ...sCard }}>
+                  <div key={p.id} style={{ ...sCard, opacity: on ? 1 : .7 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--border)", flexWrap: "wrap" }}>
                       <span style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 9, background: "var(--accent-tint)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
@@ -763,9 +882,10 @@ export default function Config() {
                       </div>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 999, fontSize: 11, fontWeight: 600, color: pillColor, background: pillBg, flexShrink: 0 }}>
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: pillColor }} />
-                        {isActive ? "ativo" : "inativo"}
+                        {on ? "ligado" : "desligado"}
                       </span>
-                      <button style={{ height: 30, padding: "0 12px", borderRadius: 7, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
+                      <Toggle on={on} onChange={() => togglePinned(p)} />
+                      <button onClick={() => openPwEdit(p)} style={{ height: 30, padding: "0 12px", borderRadius: 7, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
                         Editar
                       </button>
                       <button onClick={() => delPinned(p.id)} title="Deletar worker" style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, border: "1px solid rgba(248,81,73,.4)", background: "var(--red-tint)", color: "var(--red)", cursor: "pointer", flexShrink: 0 }}>
@@ -773,13 +893,26 @@ export default function Config() {
                       </button>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 1, background: "var(--border)" }}>
-                      {[["Repositório", p.repo_name || "qualquer"], ["Foco", p.focus], ["Concorrência", String(p.concurrency)]].map(([k, v]) => (
+                      {[["Repositório", p.repo_name || "qualquer"], ["Foco", p.focus || "—"], ["Modelo", MODEL_LABELS[p.model] || p.model], ["Concorrência", String(p.concurrency)]].map(([k, v]) => (
                         <div key={k} style={{ background: "var(--card)", padding: "11px 14px", display: "flex", flexDirection: "column", gap: 3 }}>
                           <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--mute)" }}>{k}</span>
                           <span style={{ fontSize: 12.5, color: "var(--ink)", fontWeight: 500, fontFamily: "var(--mono)" }}>{v}</span>
                         </div>
                       ))}
                     </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 14px", borderTop: "1px solid var(--border)" }}>
+                      {caps.map(([label, ok]) => (
+                        <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 999, color: ok ? "var(--green)" : "var(--mute)", background: ok ? "var(--green-tint)" : "var(--elev)" }}>
+                          {ok ? "✓" : "✕"} {label}
+                        </span>
+                      ))}
+                    </div>
+                    {p.rules && (
+                      <div style={{ padding: "10px 14px", borderTop: "1px solid var(--border)" }}>
+                        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--mute)" }}>Regras</span>
+                        <div style={{ fontSize: 12, color: "var(--ink)", lineHeight: 1.5, marginTop: 3, whiteSpace: "pre-wrap" }}>{p.rules}</div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -815,10 +948,10 @@ export default function Config() {
                 </div>
                 <span style={{ fontSize: 11.5, color: "var(--mute)", fontFamily: "var(--mono)" }}>{short(rx.clone_url, 60)}</span>
               </div>
-              <button style={{ height: 32, padding: "0 13px", borderRadius: 7, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
+              <button onClick={() => openRepoEdit(rx)} style={{ height: 32, padding: "0 13px", borderRadius: 7, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
                 Editar
               </button>
-              <button title="Excluir" style={{ width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, border: "1px solid rgba(248,81,73,.4)", background: "var(--red-tint)", color: "var(--red)", cursor: "pointer", flexShrink: 0 }}>
+              <button onClick={() => setRepoDel(rx)} title="Excluir" style={{ width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, border: "1px solid rgba(248,81,73,.4)", background: "var(--red-tint)", color: "var(--red)", cursor: "pointer", flexShrink: 0 }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
               </button>
             </div>
@@ -1181,11 +1314,47 @@ export default function Config() {
               </div>
               <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                 <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Diretório local para clonar</span>
-                <input style={input} value={repoDir} autoFocus onChange={(e) => setRepoDir(e.target.value)} placeholder="~/apifor/meu-repo" />
-                <span style={{ fontSize: 11, color: "var(--mute)" }}>Caminho na máquina onde o repositório será clonado.</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ ...input, flex: 1 }} value={repoDir} autoFocus onChange={(e) => setRepoDir(e.target.value)} placeholder="~/apifor/meu-repo" />
+                  <button type="button" onClick={pickLocalDir} title={isTauri ? "Escolher pasta" : "Disponível no app desktop"}
+                    style={{ height: 38, padding: "0 14px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, opacity: isTauri ? 1 : .55 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                    Procurar
+                  </button>
+                </div>
+                <span style={{ fontSize: 11, color: "var(--mute)" }}>Caminho na máquina onde o repositório será clonado.{!isTauri && " No navegador, digite manualmente."}</span>
               </label>
             </div>
           )}
+        </Modal>
+      )}
+
+      {repoEdit && (
+        <Modal title="Editar repositório" onClose={() => setRepoEdit(null)}
+          footer={
+            <button style={{ ...btn, opacity: editBusy || !editName.trim() ? .6 : 1, pointerEvents: editBusy || !editName.trim() ? "none" : "auto" }} onClick={saveRepoEdit}>{editBusy ? "Salvando…" : "Salvar"}</button>
+          }>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Nome</span>
+              <input style={input} value={editName} autoFocus onChange={(e) => setEditName(e.target.value)} placeholder="meu-repo" />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Branch padrão</span>
+              <input style={input} value={editBranch} onChange={(e) => setEditBranch(e.target.value)} placeholder="main" />
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {repoDel && (
+        <Modal title="Excluir repositório" onClose={() => setRepoDel(null)}
+          footer={
+            <button style={{ ...btn, background: "var(--red)", borderColor: "var(--red)", opacity: delBusy ? .6 : 1, pointerEvents: delBusy ? "none" : "auto" }} onClick={confirmDelRepo}>{delBusy ? "Excluindo…" : "Excluir"}</button>
+          }>
+          <p style={{ fontSize: 13, color: "var(--mute)", lineHeight: 1.6, margin: 0 }}>
+            Remover <strong style={{ color: "var(--ink)" }}>{repoDel.name}</strong> da lista? Isso apaga só o registro no apifor — <strong>não</strong> apaga a pasta clonada no seu disco.
+          </p>
         </Modal>
       )}
 
@@ -1494,10 +1663,10 @@ export default function Config() {
       })()}
 
       {pwOpen && (
-        <Modal title="Adicionar worker dedicado" onClose={() => setPwOpen(false)}
+        <Modal title={pwEditId ? "Editar worker dedicado" : "Adicionar worker dedicado"} onClose={() => setPwOpen(false)}
           footer={<>
             <button style={{ height: 38, padding: "0 16px", borderRadius: 9, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => setPwOpen(false)}>Cancelar</button>
-            <button style={btn} onClick={addPinned}>Criar worker</button>
+            <button style={{ ...btn, opacity: pwBusy ? .6 : 1, pointerEvents: pwBusy ? "none" : "auto" }} onClick={savePw}>{pwBusy ? "Salvando…" : pwEditId ? "Salvar" : "Criar worker"}</button>
           </>}>
           <div style={{ display: "grid", gap: 12 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -1523,7 +1692,24 @@ export default function Config() {
                 {[1,2,3,4].map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             </label>
-            <span style={{ fontSize: 11.5, color: "var(--mute)" }}>O modelo escolhido roda nas tarefas desse repo; a soma das concorrências é o teto do pool.</span>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>Regras do worker</span>
+              <textarea style={{ ...input, minHeight: 74, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }} value={pw.rules} onChange={(e) => setPw({ ...pw, rules: e.target.value })} placeholder="Ex.: sempre adicione testes; não altere migrations; siga o padrão de commits…" />
+              <span style={{ fontSize: 11, color: "var(--mute)" }}>Injetado no plano das tarefas desse repo.</span>
+            </label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>O que o worker pode fazer</span>
+              {([["cap_open_pr","Abrir Pull Request","em breve — ainda não aplicado"],["cap_run_tests","Rodar testes (CI)","pula a etapa de testes se desligado"],["cap_auto_merge","Auto-merge","se desligado, exige revisão humana"]] as [keyof typeof pw, string, string][]).map(([k, label, hint]) => (
+                <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <span style={{ fontSize: 12.5, color: "var(--ink)", fontWeight: 500 }}>{label}</span>
+                    <span style={{ fontSize: 10.5, color: "var(--mute)" }}>{hint}</span>
+                  </div>
+                  <Toggle on={!!pw[k]} onChange={(v) => setPw({ ...pw, [k]: v })} />
+                </div>
+              ))}
+            </div>
+            <span style={{ fontSize: 11.5, color: "var(--mute)" }}>O modelo roda nas tarefas desse repo; a soma das concorrências dos workers ligados é o teto do pool.</span>
           </div>
         </Modal>
       )}
