@@ -505,9 +505,12 @@ function WorkspaceMenu({ lang }: { lang: string }) {
     apiGet<{ data: any[] }>("/v1/workspaces").then((r) => {
       const list = r?.data || [];
       setWsps(list);
-      // Selecionar primeiro workspace se nenhum estiver salvo
+      // Seleciona o primeiro workspace se nenhum estiver salvo OU se o salvo não
+      // pertence à org atual (ex.: troca de conta deixa um wsp de outra org no
+      // localStorage -> o header X-Workspace-ID filtrava tudo e a UI ficava vazia).
       setCurId((prev) => {
-        if (!prev && list.length > 0) {
+        const valid = prev && list.some((w) => w.id === prev);
+        if (!valid && list.length > 0) {
           try { localStorage.setItem("apifor_wsp", list[0].id); } catch {}
           return list[0].id;
         }
