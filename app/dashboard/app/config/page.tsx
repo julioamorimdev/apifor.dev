@@ -613,6 +613,13 @@ export default function Config() {
     reloadPinned();
   }
   async function delPinned(id: string) { await apiDelete(`/v1/pinned-workers/${id}`); reloadPinned(); }
+  async function toggleAllPinned(enabled: boolean) {
+    try {
+      await apiPost("/v1/pinned-workers/bulk", { enabled });
+      toast(enabled ? "todos os workers ligados" : "todos os workers desligados", "success");
+      reloadPinned();
+    } catch (e) { toast(e instanceof Error ? e.message : "falha ao alterar workers", "error"); }
+  }
 
   const running    = pool ? !pool.paused : false;
   const mode       = pool?.mode || "pool";
@@ -848,10 +855,22 @@ export default function Config() {
                   <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>Workers dedicados</span>
                   <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--mute)" }}>{pinnedList.length} / 8</span>
                 </div>
-                <button style={sFilledBtn} disabled={pinnedList.length >= 8} onClick={openPwCreate}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-                  Adicionar worker
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {pinnedList.length > 0 && (() => {
+                    const allOn = pinnedList.every((p) => p.enabled !== false);
+                    return (
+                      <button title={allOn ? "Desligar todos os workers" : "Ligar todos os workers"} onClick={() => toggleAllPinned(!allOn)}
+                        style={{ height: 34, padding: "0 13px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", fontSize: 12.5, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: allOn ? "var(--green)" : "var(--mute)" }} />
+                        {allOn ? "Desligar todos" : "Ligar todos"}
+                      </button>
+                    );
+                  })()}
+                  <button style={sFilledBtn} disabled={pinnedList.length >= 8} onClick={openPwCreate}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                    Adicionar worker
+                  </button>
+                </div>
               </div>
 
               {running && (
@@ -866,7 +885,7 @@ export default function Config() {
                 const pillColor   = on ? "var(--green)" : "var(--mute)";
                 const pillBg      = on ? "var(--green-tint)" : "var(--border)";
                 const caps = [
-                  ["Abrir PR" + (p.cap_open_pr !== false ? " (em breve)" : ""), p.cap_open_pr !== false],
+                  ["Abrir PR", p.cap_open_pr !== false],
                   ["Rodar testes", p.cap_run_tests !== false],
                   ["Auto-merge", !!p.cap_auto_merge],
                 ] as [string, boolean][];
@@ -1699,7 +1718,7 @@ export default function Config() {
             </label>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--dim)" }}>O que o worker pode fazer</span>
-              {([["cap_open_pr","Abrir Pull Request","em breve — ainda não aplicado"],["cap_run_tests","Rodar testes (CI)","pula a etapa de testes se desligado"],["cap_auto_merge","Auto-merge","se desligado, exige revisão humana"]] as [keyof typeof pw, string, string][]).map(([k, label, hint]) => (
+              {([["cap_open_pr","Abrir Pull Request","se desligado, só faz push do branch (sem PR)"],["cap_run_tests","Rodar testes (CI)","pula a etapa de testes se desligado"],["cap_auto_merge","Auto-merge","se desligado, exige revisão humana"]] as [keyof typeof pw, string, string][]).map(([k, label, hint]) => (
                 <div key={k} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     <span style={{ fontSize: 12.5, color: "var(--ink)", fontWeight: 500 }}>{label}</span>

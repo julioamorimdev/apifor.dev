@@ -168,6 +168,11 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 
 			// Se a tarefa tem repositório, despacha o exec real (clone -> coda -> PR).
 			if tr, err := s.DB.GetTaskRepo(ctx, pr.GetTaskId()); err == nil && tr != nil && tr.CloneURL != "" {
+				// capability do worker: pode desligar a abertura de PR (só faz push).
+				openPR := true
+				if cfg, ok := s.DB.PinnedWorkerForRepo(ctx, s.taskOrg(ctx, pr.GetTaskId()), tr.RepoID); ok {
+					openPR = cfg.OpenPR
+				}
 				instr := execInstructions{
 					RepoURL:     tr.CloneURL,
 					BaseBranch:  tr.DefaultBranch,
@@ -175,6 +180,7 @@ func (s *Server) Stream(stream apiforv1.Orchestrator_StreamServer) error {
 					ChangeReq:   tr.Prompt,
 					TargetFiles: pr.GetTargetFiles(),
 					Model:       s.coderModel(ctx, tr),
+					OpenPR:      openPR,
 				}
 				blob, _ := json.Marshal(instr)
 				out <- &apiforv1.Envelope{
@@ -201,6 +207,7 @@ type execInstructions struct {
 	ChangeReq   string   `json:"change_request"`
 	TargetFiles []string `json:"target_files,omitempty"`
 	Model       string   `json:"model,omitempty"` // M4.2: modelo do agente desta etapa
+	OpenPR      bool     `json:"open_pr"`         // capability: abrir PR (exec). default true no dispatch.
 }
 
 // stepResult é o output JSON de um step do pipeline (exec/test/review/merge).

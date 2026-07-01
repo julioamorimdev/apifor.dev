@@ -1,5 +1,6 @@
 "use client";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -627,13 +628,13 @@ function Sidebar() {
             {g.items.map(([href, label, key]) => {
               const active = path === href;
               return (
-                <a key={href} href={href} className={active ? "" : "apf-navitem"}
-                  style={{ position: "relative", display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, fontWeight: active ? 600 : 500, ...(active ? { color: "var(--ink)", background: "var(--elev)" } : {}) }}>
+                <Link key={href} href={href} prefetch={false} className={active ? "" : "apf-navitem"}
+                  style={{ position: "relative", display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, fontSize: 13.5, fontWeight: active ? 600 : 500, textDecoration: "none", ...(active ? { color: "var(--ink)", background: "var(--elev)" } : {}) }}>
                   {active && <span style={{ position: "absolute", left: 0, top: 7, bottom: 7, width: 3, borderRadius: 3, background: "var(--accent)" }} />}
                   <Ico name={href} color={active ? "var(--accent)" : "var(--mute)"} />
                   {navLabel(lang, href, label)}
                   {countBadge((counts as any)[key || ""], href === "/interventions" ? "red" : "accent")}
-                </a>
+                </Link>
               );
             })}
           </div>
@@ -783,9 +784,9 @@ function NotifMenu({ unread: initUnread }: { unread: number }) {
 
             {/* footer */}
             <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
-              <a href="/notifications" onClick={() => setOpen(false)} style={{ display: "block", textAlign: "center", fontSize: 12.5, fontWeight: 600, color: "var(--accent)", textDecoration: "none" }}>
+              <Link href="/notifications" prefetch={false} onClick={() => setOpen(false)} style={{ display: "block", textAlign: "center", fontSize: 12.5, fontWeight: 600, color: "var(--accent)", textDecoration: "none" }}>
                 Ver todas as notificações →
-              </a>
+              </Link>
             </div>
           </div>
         </Portal>
@@ -854,11 +855,11 @@ function ProfileMenu({ lang }: { lang: string }) {
           </div>
 
           {ITEMS.map((item) => (
-            <a key={item.href} href={item.href} onClick={() => setOpen(false)} className="apf-link"
+            <Link key={item.href} href={item.href} prefetch={false} onClick={() => setOpen(false)} className="apf-link"
               style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 12px", borderRadius: 8, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
               <span style={{ color: "var(--mute)" }}>{item.icon}</span>
               {item.label}
-            </a>
+            </Link>
           ))}
 
           {/* separator + logout */}

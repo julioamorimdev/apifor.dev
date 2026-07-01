@@ -358,6 +358,22 @@ func (d *DB) PinnedWorkerForRepo(ctx context.Context, orgID, repoID string) (cfg
 	return cfg, true
 }
 
+// SetAllPinnedEnabled liga/desliga TODOS os workers dedicados da org de uma vez.
+// Devolve quantos foram afetados.
+func (d *DB) SetAllPinnedEnabled(ctx context.Context, orgID string, enabled bool) (int64, error) {
+	var n int64
+	err := d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		ct, e := tx.Exec(ctx, `UPDATE pinned_worker
+			SET settings = jsonb_set(COALESCE(settings,'{}'::jsonb), '{enabled}', to_jsonb($2::bool))
+			WHERE org_id=$1`, orgID, enabled)
+		if e == nil {
+			n = ct.RowsAffected()
+		}
+		return e
+	})
+	return n, err
+}
+
 func (d *DB) DeletePinnedWorker(ctx context.Context, orgID, id string) error {
 	return d.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `DELETE FROM pinned_worker WHERE id=$1 AND org_id=$2`, id, orgID)
