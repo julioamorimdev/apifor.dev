@@ -4,7 +4,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,12 +55,25 @@ type API struct {
 	// AuthSidecarURL: base do sidecar que dirige o `claude setup-token` (OAuth
 	// da assinatura). Vazio = recurso indisponível (502 nas rotas claude/*).
 	AuthSidecarURL string
-	// GitHubOAuthClientID: client id p/ o device-flow do GitHub (default: o
-	// client público do gh CLI). Override via env GITHUB_OAUTH_CLIENT_ID.
+	// GitHubOAuthClientID: client id p/ o OAuth do GitHub (default: o client
+	// público do gh CLI). Override via env GITHUB_OAUTH_CLIENT_ID.
 	GitHubOAuthClientID string
+	// GitHubOAuthClientSecret: secret do OAuth App. Quando presente, "Conectar"
+	// usa o web-flow (redirect → autoriza → callback), que respeita o scope repo
+	// e traz repositórios privados. Vazio = cai no device-flow (código colado).
+	GitHubOAuthClientSecret string
 	// device-flows do GitHub em andamento, por org.
 	ghMu    sync.Mutex
 	ghFlows map[string]*ghFlow
+	// web-flows do GitHub em andamento, por state (CSRF + roteia o callback).
+	ghStates map[string]*ghState
+}
+
+// ghState liga um state opaco do web-flow à org/propósito que o iniciou.
+type ghState struct {
+	org     string
+	purpose string
+	exp     time.Time
 }
 
 // ghFlow guarda o estado de um device-flow do GitHub p/ uma org.
@@ -86,8 +101,20 @@ func (a *API) Routes() http.Handler {
 	if a.ghFlows == nil {
 		a.ghFlows = map[string]*ghFlow{}
 	}
+	if a.ghStates == nil {
+		a.ghStates = map[string]*ghState{}
+	}
 	if a.GitHubOAuthClientID == "" {
 		a.GitHubOAuthClientID = "Iv1.b507a08c87ecfe98" // client público do gh CLI
+	}
+	// O default (client do gh CLI) é um GitHub App, e GitHub Apps IGNORAM o
+	// scope "repo" no device-flow: /user/repos só devolve repositórios onde o
+	// App está instalado, então repos privados não aparecem no "adicionar
+	// repositório". Para listar todos os privados, registre um OAuth App (com
+	// device-flow habilitado) e aponte GITHUB_OAUTH_CLIENT_ID p/ o client id
+	// dele (OAuth Apps honram o scope). Prefixos Iv1./Iv23. = GitHub App.
+	if strings.HasPrefix(a.GitHubOAuthClientID, "Iv1.") || strings.HasPrefix(a.GitHubOAuthClientID, "Iv23") {
+		log.Printf("[github] client id %q é um GitHub App: o scope repo é ignorado e repositórios privados podem não aparecer na listagem. Use um OAuth App via GITHUB_OAUTH_CLIENT_ID.", a.GitHubOAuthClientID)
 	}
 	if a.rl == nil {
 		a.rl = newRateLimiter(a.DB)
@@ -128,6 +155,8 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/v1/connections/code/repos", a.codeRemoteRepos)   // GET lista repositórios remotos da conta conectada
 	mux.HandleFunc("/v1/connections/git/github/device", a.githubDeviceStart)  // POST inicia device-flow
 	mux.HandleFunc("/v1/connections/git/github/device/status", a.githubDeviceStatus) // GET status do device-flow
+	mux.HandleFunc("/v1/connections/git/github/oauth/start", a.githubOAuthStart)       // POST inicia web-flow -> {url}
+	mux.HandleFunc("/v1/connections/git/github/oauth/callback", a.githubOAuthCallback) // GET callback do GitHub (sem bearer; usa state)
 	mux.HandleFunc("/v1/connections/tasks", a.tasksConnect)    // POST conecta fonte de tarefas / DELETE desconecta
 	mux.HandleFunc("/v1/connections/tasks/test", a.tasksTest)  // POST valida credencial da fonte de tarefas
 	mux.HandleFunc("/v1/connections/integration", a.integrationConnect)     // POST conecta CI/observabilidade / DELETE
@@ -1393,16 +1422,7 @@ func (a *API) pollGitHubDevice(org, deviceCode string, interval, expiresIn int, 
 		if tok.AccessToken != "" {
 			ok, login, _, _ := a.validateGitToken(context.Background(), "github", tok.AccessToken, "")
 			if ok {
-				switch purpose {
-				case "tasks":
-					_, _ = a.DB.SetTaskSource(context.Background(), org, "github", login)
-				case "ci":
-					_, _ = a.DB.SetTypedConnection(context.Background(), org, "ci", "github_actions", login)
-				case "docs":
-					_, _ = a.DB.SetTypedConnection(context.Background(), org, "docs", "github_wiki", login)
-				default:
-					_, _ = a.DB.SetCodeProviderToken(context.Background(), org, "github", login, tok.AccessToken, "", "oauth")
-				}
+				a.storeGitHubConn(context.Background(), org, purpose, login, tok.AccessToken)
 				set("authorized", login, "")
 			} else {
 				set("error", "", "token recebido mas inválido")
@@ -1442,6 +1462,154 @@ func (a *API) githubDeviceStatus(w http.ResponseWriter, r *http.Request) {
 		"status": f.status, "login": f.login, "error": f.errMsg,
 		"user_code": f.userCode, "verification_uri": f.verifyURI,
 	})
+}
+
+// normalizePurpose valida o propósito da conexão do GitHub (onde gravar).
+func normalizePurpose(p string) string {
+	if p == "tasks" || p == "ci" || p == "docs" {
+		return p
+	}
+	return "code"
+}
+
+// storeGitHubConn grava a conexão do GitHub no destino certo conforme o
+// propósito. "code" guarda o token (necessário p/ listar repos e clonar).
+func (a *API) storeGitHubConn(ctx context.Context, org, purpose, login, token string) {
+	switch purpose {
+	case "tasks":
+		_, _ = a.DB.SetTaskSource(ctx, org, "github", login)
+	case "ci":
+		_, _ = a.DB.SetTypedConnection(ctx, org, "ci", "github_actions", login)
+	case "docs":
+		_, _ = a.DB.SetTypedConnection(ctx, org, "docs", "github_wiki", login)
+	default:
+		_, _ = a.DB.SetCodeProviderToken(ctx, org, "github", login, token, "", "oauth")
+	}
+}
+
+// ghCallbackURL: onde o GitHub devolve o browser após autorizar. Passa pelo
+// proxy /api do dashboard e cai em githubOAuthCallback. DEVE bater exatamente
+// com a "Authorization callback URL" registrada no OAuth App.
+func (a *API) ghCallbackURL() string {
+	return strings.TrimRight(a.PublicURL, "/") + "/api/v1/connections/git/github/oauth/callback"
+}
+
+// githubOAuthStart inicia o web-flow do OAuth do GitHub: gera um state, guarda
+// a org/propósito e devolve a URL de autorização p/ o front abrir numa aba. É a
+// UX "clicar → autorizar no GitHub → pronto" (sem colar código). Requer um
+// OAuth App (GITHUB_OAUTH_CLIENT_ID + GITHUB_OAUTH_CLIENT_SECRET); sem secret
+// responde 501 e o front cai no device-flow.
+func (a *API) githubOAuthStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, errBody("method", "use POST"))
+		return
+	}
+	if !a.requireCap(w, r, "manage") {
+		return
+	}
+	if a.GitHubOAuthClientSecret == "" {
+		writeJSON(w, 501, errBody("not_configured", "web-flow indisponível: configure GITHUB_OAUTH_CLIENT_ID/SECRET de um OAuth App"))
+		return
+	}
+	org := a.orgFrom(r)
+	var body struct {
+		Purpose string `json:"purpose"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	purpose := normalizePurpose(body.Purpose)
+
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		writeJSON(w, 500, errBody("internal", "falha ao gerar state"))
+		return
+	}
+	state := hex.EncodeToString(buf)
+
+	a.ghMu.Lock()
+	// GC de states expirados + registra o novo.
+	now := time.Now()
+	for k, s := range a.ghStates {
+		if now.After(s.exp) {
+			delete(a.ghStates, k)
+		}
+	}
+	a.ghStates[state] = &ghState{org: org, purpose: purpose, exp: now.Add(10 * time.Minute)}
+	// zera o status p/ o poll do front (reaproveita ghFlows[org]).
+	a.ghFlows[org] = &ghFlow{status: "pending", purpose: purpose}
+	a.ghMu.Unlock()
+
+	q := url.Values{
+		"client_id":    {a.GitHubOAuthClientID},
+		"redirect_uri": {a.ghCallbackURL()},
+		"scope":        {"repo workflow"},
+		"state":        {state},
+	}
+	authURL := "https://github.com/login/oauth/authorize?" + q.Encode()
+	writeJSON(w, 200, map[string]any{"url": authURL})
+}
+
+// githubOAuthCallback recebe o redirect do GitHub (browser, sem bearer). Usa o
+// state p/ recuperar org/propósito, troca o code por token, valida e grava a
+// conexão. No fim redireciona o browser de volta ao dashboard.
+func (a *API) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	back := func(status string) {
+		http.Redirect(w, r, strings.TrimRight(a.PublicURL, "/")+"/config?github="+status, http.StatusFound)
+	}
+	q := r.URL.Query()
+	if e := q.Get("error"); e != "" {
+		back("denied")
+		return
+	}
+	code, state := q.Get("code"), q.Get("state")
+	a.ghMu.Lock()
+	st := a.ghStates[state]
+	delete(a.ghStates, state)
+	a.ghMu.Unlock()
+	if code == "" || st == nil || time.Now().After(st.exp) {
+		back("error")
+		return
+	}
+	fail := func(msg string) {
+		a.ghMu.Lock()
+		a.ghFlows[st.org] = &ghFlow{status: "error", purpose: st.purpose, errMsg: msg}
+		a.ghMu.Unlock()
+		back("error")
+	}
+
+	form := url.Values{
+		"client_id":     {a.GitHubOAuthClientID},
+		"client_secret": {a.GitHubOAuthClientSecret},
+		"code":          {code},
+		"redirect_uri":  {a.ghCallbackURL()},
+	}
+	req, _ := http.NewRequestWithContext(r.Context(), "POST", "https://github.com/login/oauth/access_token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		fail("falha ao contatar GitHub: " + err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	var tok struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&tok)
+	if tok.AccessToken == "" {
+		fail("GitHub não retornou token: " + tok.Error)
+		return
+	}
+	ok, login, _, _ := a.validateGitToken(r.Context(), "github", tok.AccessToken, "")
+	if !ok {
+		fail("token recebido mas inválido")
+		return
+	}
+	a.storeGitHubConn(r.Context(), st.org, st.purpose, login, tok.AccessToken)
+	a.ghMu.Lock()
+	a.ghFlows[st.org] = &ghFlow{status: "authorized", login: login, purpose: st.purpose}
+	a.ghMu.Unlock()
+	back("ok")
 }
 
 // taskSourceLabels: providers de fonte de tarefas suportados.
@@ -1853,7 +2021,14 @@ func (a *API) reuseConnection(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch in.Target {
 	case "code":
-		id, err = a.DB.SetCodeProvider(r.Context(), org, provider, label)
+		// Código precisa de token (listar repos + clonar). Reaproveita o token
+		// guardado em qualquer conexão da família; sem token, não dá p/ ativar.
+		tok, uname := a.DB.FindProviderToken(r.Context(), org, all)
+		if tok == "" {
+			writeJSON(w, 200, map[string]any{"ok": false, "message": "essa identidade não tem token p/ código — conecte o " + in.Family + " em Conexões → Código (Autorizar com GitHub) p/ listar e clonar repositórios"})
+			return
+		}
+		id, err = a.DB.SetCodeProviderToken(r.Context(), org, provider, label, tok, uname, "oauth")
 	case "tasks":
 		id, err = a.DB.SetTaskSource(r.Context(), org, provider, label)
 	case "ci":

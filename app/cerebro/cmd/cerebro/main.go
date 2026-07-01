@@ -138,7 +138,8 @@ func main() {
 		RequireAuth:         os.Getenv("REQUIRE_AUTH") == "true", // M6.2: fecha o fallback dev
 		SuperAdminEmails:    superAdminEmails,
 		AuthSidecarURL:      os.Getenv("AUTH_SIDECAR_URL"),        // OAuth assinatura Claude (claude setup-token)
-		GitHubOAuthClientID: os.Getenv("GITHUB_OAUTH_CLIENT_ID"), // device-flow GitHub (default: gh CLI)
+		GitHubOAuthClientID:     os.Getenv("GITHUB_OAUTH_CLIENT_ID"),     // OAuth GitHub (default: gh CLI)
+		GitHubOAuthClientSecret: os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"), // secret do OAuth App -> web-flow
 	}
 	serveHTTP(httpAddr, api.Routes(), ca)
 }

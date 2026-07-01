@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiDelete, apiGet, apiPost, badge, btn, input, Modal, Page, PageHead, short, Toggle, usePoll } from "../ui";
+import { apiDelete, apiGet, apiPost, badge, btn, input, Modal, Page, PageHead, short, toast, Toggle, usePoll } from "../ui";
 
 type Repo    = { id: string; name: string; default_branch: string; clone_url: string };
 type Secret  = { id: string; name: string; type: string; fingerprint: string; location: string };
@@ -240,33 +240,63 @@ export default function Config() {
     setGhMethod("oauth"); setGhDevice(null); setGhStatus(""); setGhErr(""); setGhStarting(false);
   }
 
-  // device-flow do GitHub reutilizável: purpose "code" (conexão de código) ou
-  // "tasks" (fonte de tarefas). O backend grava no tipo certo.
+  // faz o polling do status do OAuth do GitHub (mesmo endpoint p/ web-flow e
+  // device-flow); ao autorizar, recarrega as conexões e fecha os modais.
+  function pollGhStatus(intervalMs: number) {
+    stopGhPoll();
+    ghPoll.current = setInterval(async () => {
+      try {
+        const s = await apiGet<{ status?: string; login?: string; error?: string }>("/v1/connections/git/github/device/status");
+        setGhStatus(s?.status || "");
+        if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); resetTask(); resetInt(); }
+        else if (s?.status === "expired" || s?.status === "denied" || s?.status === "error") {
+          stopGhPoll(); setGhDevice(null); setGhErr(s?.error || "autorização falhou");
+        }
+      } catch { /* segue tentando */ }
+    }, intervalMs);
+  }
+
+  // conecta o GitHub via OAuth. Tenta o web-flow (clicar → autorizar no GitHub
+  // → pronto, sem colar código); se o OAuth App não estiver configurado no
+  // servidor, cai no device-flow (código colado). purpose roteia onde gravar.
   async function startGithubDevice(purpose: "code" | "tasks" | "ci" | "docs") {
     setGhStarting(true); setGhErr(""); setGhStatus(""); setGhDevice(null);
     try {
+      // 1) web-flow: abre a autorização do GitHub direto numa aba.
+      const w = await apiPost<{ url?: string; error?: { code?: string; message?: string } }>("/v1/connections/git/github/oauth/start", { purpose });
+      if (w?.url) {
+        setGhStatus("pending");
+        window.open(w.url, "_blank", "noopener,noreferrer");
+        pollGhStatus(2000);
+        return;
+      }
+      if (w?.error && w.error.code !== "not_configured") throw new Error(w.error.message || "falha ao iniciar OAuth");
+      // 2) fallback device-flow (servidor sem client secret): código colado.
       const r = await apiPost<{ user_code?: string; verification_uri?: string; interval?: number; error?: { message?: string } }>("/v1/connections/git/github/device", { purpose });
       if (!r?.user_code || !r?.verification_uri) throw new Error(r?.error?.message || "falha ao iniciar OAuth");
       setGhDevice({ user_code: r.user_code, verification_uri: r.verification_uri });
       setGhStatus("pending");
       window.open(r.verification_uri, "_blank", "noopener,noreferrer");
-      stopGhPoll();
-      ghPoll.current = setInterval(async () => {
-        try {
-          const s = await apiGet<{ status?: string; login?: string; error?: string }>("/v1/connections/git/github/device/status");
-          setGhStatus(s?.status || "");
-          if (s?.status === "authorized") { stopGhPoll(); reloadConns(); resetGit(); resetTask(); resetInt(); }
-          else if (s?.status === "expired" || s?.status === "denied" || s?.status === "error") {
-            stopGhPoll(); setGhDevice(null); setGhErr(s?.error || "autorização falhou");
-          }
-        } catch { /* segue tentando */ }
-      }, Math.max(2, r.interval || 5) * 1000);
+      pollGhStatus(Math.max(2, r.interval || 5) * 1000);
     } catch (e) {
       setGhErr(e instanceof Error ? e.message : "falha ao iniciar OAuth");
     } finally { setGhStarting(false); }
   }
 
   useEffect(() => () => stopGhPoll(), []);
+
+  // volta do web-flow do GitHub (?github=ok|denied|error). Esta aba (aberta
+  // pelo "Conectar") aterrissa aqui já conectada; a aba original também atualiza
+  // pelo poll. Limpa a URL e, no sucesso, recarrega as conexões.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search).get("github");
+    if (!p) return;
+    window.history.replaceState({}, "", "/config");
+    if (p === "ok") reloadConns();
+    else setGhErr(p === "denied" ? "autorização negada no GitHub" : "falha na autorização do GitHub");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function testGit() {
     if (!gitToken.trim() || !gitModal) return;
@@ -397,7 +427,9 @@ export default function Config() {
     return (conns || []).find((c) => providerFamily(c.provider) === fam)?.label || null;
   }
   async function reuseConn(family: string, target: "code" | "tasks" | "ci" | "docs") {
-    await apiPost("/v1/connections/reuse", { family, target });
+    const r = await apiPost<{ ok?: boolean; message?: string }>("/v1/connections/reuse", { family, target });
+    if (r?.ok === false) { toast(r?.message || "não foi possível reaproveitar", "error"); return; }
+    toast("conexão reaproveitada", "success");
     reloadConns();
   }
   // botão "Reaproveitar @login" quando a família já está conectada em outra aba
@@ -1269,9 +1301,11 @@ export default function Config() {
                   <div style={{ width: 52, height: 52, borderRadius: 13, background: "var(--accent-tint)", border: "1px solid var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--accent)" }}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.3 5.4 2.6 5.4 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>
                   </div>
-                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto. Sem criar token manualmente.</span>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Abrimos o GitHub numa aba para você autorizar o acesso (repositórios, incl. privados). Sem criar token manualmente.</span>
                   {ghErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{ghErr}</span>}
-                  <button style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 8, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice("code")}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                  {ghStatus === "pending"
+                    ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--mute)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>aguardando autorização na aba do GitHub…</span>
+                    : <button style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 8, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice("code")}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>}
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
@@ -1348,9 +1382,11 @@ export default function Config() {
             {oauthMode ? (
               !ghDevice ? (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 16, padding: "10px 8px 4px" }}>
-                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto.</span>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Abrimos o GitHub numa aba para você autorizar o acesso. Sem criar token manualmente.</span>
                   {ghErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{ghErr}</span>}
-                  <button style={{ ...btn, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice("tasks")}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                  {ghStatus === "pending"
+                    ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--mute)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>aguardando autorização na aba do GitHub…</span>
+                    : <button style={{ ...btn, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice("tasks")}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>}
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
@@ -1411,9 +1447,11 @@ export default function Config() {
             {intOauth ? (
               !ghDevice ? (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 16, padding: "10px 8px 4px" }}>
-                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Autorize via GitHub — abrimos github.com/login/device e você digita um código curto.</span>
+                  <span style={{ fontSize: 12.5, color: "var(--mute)", lineHeight: 1.55, maxWidth: 340 }}>Abrimos o GitHub numa aba para você autorizar o acesso. Sem criar token manualmente.</span>
                   {ghErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{ghErr}</span>}
-                  <button style={{ ...btn, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice(m.oauth!)}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>
+                  {ghStatus === "pending"
+                    ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--mute)" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>aguardando autorização na aba do GitHub…</span>
+                    : <button style={{ ...btn, opacity: ghStarting ? .6 : 1, pointerEvents: ghStarting ? "none" : "auto" }} onClick={() => startGithubDevice(m.oauth!)}>{ghStarting ? "Iniciando…" : "Autorizar com GitHub"}</button>}
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: 14, padding: "6px 8px" }}>
